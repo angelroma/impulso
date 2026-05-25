@@ -47,6 +47,7 @@ Thumbs.db
 # Expo
 node_modules/
 .expo/
+.tamagui/
 .yarn/
 dist/
 npm-debug.*

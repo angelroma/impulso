@@ -2,8 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
+    "lib": ["es2022", "dom"],
     "types": ["node"],
-    "rootDir": "src",
+    "rootDir": ".",
     "jsx": "react-jsx",
     "noUnusedLocals": false,
     "tsBuildInfoFile": "dist/tsconfig.app.tsbuildinfo"
