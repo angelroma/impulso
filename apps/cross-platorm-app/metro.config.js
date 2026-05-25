@@ -14,12 +14,20 @@ const { assetExts, sourceExts } = defaultConfig.resolver;
  */
 const customConfig = {
   cacheVersion: '@org/cross-platorm-app',
+  server: {
+    enhanceMiddleware: (middleware) => (req, res, next) => {
+      res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+
+      return middleware(req, res, next);
+    },
+  },
   transformer: {
     babelTransformerPath: require.resolve('react-native-svg-transformer'),
   },
   resolver: {
-    assetExts: assetExts.filter((ext) => ext !== 'svg'),
-    sourceExts: [...sourceExts, 'cjs', 'mjs', 'svg'],
+    assetExts: [...assetExts.filter((ext) => ext !== 'svg'), 'wasm'],
+    sourceExts: [...sourceExts, 'cjs', 'mjs', 'sql', 'svg'],
   },
 };
 

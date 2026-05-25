@@ -1,12 +1,28 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import { AppProviders } from '../../../application/providers/AppProviders';
+import { TrackerRepository } from '../data';
 import { AddTrackerScreen } from './AddTrackerScreen';
 
-function renderAddTrackerScreen() {
+function createTrackerRepositoryMock(): TrackerRepository {
+  return {
+    createTracker: jest.fn(async (input) => ({
+      createdAt: '2026-05-25T20:30:00.000Z',
+      id: 'tracker-id',
+      method: input.method,
+      name: input.name.trim(),
+      updatedAt: '2026-05-25T20:30:00.000Z',
+    })),
+    listTrackers: jest.fn(async () => []),
+  };
+}
+
+function renderAddTrackerScreen(
+  trackerRepository = createTrackerRepositoryMock(),
+) {
   return render(
     <AppProviders>
-      <AddTrackerScreen />
+      <AddTrackerScreen trackerRepository={trackerRepository} />
     </AppProviders>,
   );
 }
@@ -59,4 +75,38 @@ test('selecting a method stays on the starter form', () => {
 
   expect(getByTestId('custom-goal-starter-screen')).toBeTruthy();
   expect(getByText('How do you want to track this?')).toBeTruthy();
+});
+
+test('creates a local tracker from valid starter fields', async () => {
+  const trackerRepository = createTrackerRepositoryMock();
+  const { getByPlaceholderText, getByTestId, getByText } =
+    renderAddTrackerScreen(trackerRepository);
+
+  fireEvent.press(getByTestId('custom-goal-option'));
+  fireEvent.changeText(
+    getByPlaceholderText('Read for 20 minutes'),
+    'Read daily',
+  );
+  fireEvent.press(getByTestId('tracker-method-habit'));
+  fireEvent.press(getByTestId('create-tracker-button'));
+
+  await waitFor(() => {
+    expect(trackerRepository.createTracker).toHaveBeenCalledWith({
+      method: 'habit',
+      name: 'Read daily',
+    });
+  });
+  expect(getByText('Created tracker "Read daily".')).toBeTruthy();
+});
+
+test('requires a goal name and tracking method before creating a tracker', async () => {
+  const trackerRepository = createTrackerRepositoryMock();
+  const { findByText, getByTestId } = renderAddTrackerScreen(trackerRepository);
+
+  fireEvent.press(getByTestId('custom-goal-option'));
+  fireEvent.press(getByTestId('create-tracker-button'));
+
+  expect(await findByText('Name your goal or habit.')).toBeTruthy();
+  expect(await findByText('Choose a tracking method.')).toBeTruthy();
+  expect(trackerRepository.createTracker).not.toHaveBeenCalled();
 });

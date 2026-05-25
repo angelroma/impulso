@@ -20,7 +20,8 @@
     },
     "web": {
       "bundler": "metro",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "output": "server"
     },
     "plugins": [
       [
@@ -32,7 +33,16 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-router"
+      [
+        "expo-router",
+        {
+          "headers": {
+            "Cross-Origin-Embedder-Policy": "credentialless",
+            "Cross-Origin-Opener-Policy": "same-origin"
+          }
+        }
+      ],
+      "expo-asset"
     ]
   }
 }

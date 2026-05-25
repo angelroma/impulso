@@ -1,6 +1,9 @@
-import { useState } from 'react';
-import { Pressable } from 'react-native';
-import { Card, YStack } from 'tamagui';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useMemo, useState } from 'react';
+import { useController, useForm } from 'react-hook-form';
+import { Platform, Pressable } from 'react-native';
+import { Card, Text, YStack } from 'tamagui';
+import { z } from 'zod';
 
 import {
   AppButton,
@@ -8,17 +11,25 @@ import {
   PageTitle,
   Screen,
   SectionTitle,
-  TextField,
 } from '../../../shared/ui';
+import { ControlledTextField } from '../../../shared/forms';
+import { useDatabase } from '../../../shared/database';
+import {
+  createTrackerRepository,
+  createWebTrackerRepository,
+  TrackerRepository,
+  trackingMethods,
+  TrackingMethod,
+} from '../data';
 
-type TrackingMethod = {
+type TrackingMethodOption = {
   description: string;
   label: string;
   testID: string;
-  value: string;
+  value: TrackingMethod;
 };
 
-const trackingMethods: TrackingMethod[] = [
+const trackingMethodOptions: TrackingMethodOption[] = [
   {
     description: 'repeating action',
     label: 'Habit',
@@ -45,9 +56,92 @@ const trackingMethods: TrackingMethod[] = [
   },
 ];
 
-export function AddTrackerScreen() {
+type CustomGoalStarterValues = {
+  method?: TrackingMethod;
+  name: string;
+};
+
+const customGoalStarterSchema = z.object({
+  method: z
+    .enum(trackingMethods)
+    .optional()
+    .refine((value) => value !== undefined, 'Choose a tracking method.'),
+  name: z.string().trim().min(1, 'Name your goal or habit.'),
+});
+
+type AddTrackerScreenProps = {
+  trackerRepository?: TrackerRepository;
+};
+
+export function AddTrackerScreen({ trackerRepository }: AddTrackerScreenProps) {
+  if (trackerRepository) {
+    return <AddTrackerScreenContent trackerRepository={trackerRepository} />;
+  }
+
+  if (Platform.OS === 'web') {
+    return <AsyncSqliteBackedAddTrackerScreen />;
+  }
+
+  return <DatabaseBackedAddTrackerScreen />;
+}
+
+function AsyncSqliteBackedAddTrackerScreen() {
+  const trackerRepository = useMemo(
+    () => createWebTrackerRepository(),
+    [],
+  );
+
+  return <AddTrackerScreenContent trackerRepository={trackerRepository} />;
+}
+
+function DatabaseBackedAddTrackerScreen() {
+  const database = useDatabase();
+  const trackerRepository = useMemo(
+    () => createTrackerRepository(database),
+    [database],
+  );
+
+  return <AddTrackerScreenContent trackerRepository={trackerRepository} />;
+}
+
+function AddTrackerScreenContent({
+  trackerRepository,
+}: {
+  trackerRepository: TrackerRepository;
+}) {
   const [isCustomGoalFormVisible, setIsCustomGoalFormVisible] = useState(false);
-  const [selectedMethod, setSelectedMethod] = useState<string>();
+  const [createdTrackerName, setCreatedTrackerName] = useState<string>();
+  const {
+    control,
+    formState: { errors, isSubmitting },
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+  } = useForm<CustomGoalStarterValues>({
+    defaultValues: {
+      method: undefined,
+      name: '',
+    },
+    resolver: zodResolver(customGoalStarterSchema),
+  });
+  useController({ control, name: 'method' });
+
+  const selectedMethod = watch('method');
+
+  const submitTracker = handleSubmit(async (values) => {
+    if (!values.method) {
+      return;
+    }
+
+    const tracker = await trackerRepository.createTracker({
+      method: values.method,
+      name: values.name,
+    });
+
+    setCreatedTrackerName(tracker.name);
+    reset({ method: undefined, name: '' });
+  });
 
   if (isCustomGoalFormVisible) {
     return (
@@ -58,9 +152,11 @@ export function AddTrackerScreen() {
         </YStack>
 
         <YStack gap="$4">
-          <TextField
+          <ControlledTextField
             autoCapitalize="sentences"
+            control={control}
             label="Name your goal or habit"
+            name="name"
             placeholder="Read for 20 minutes"
             testID="custom-goal-name-input"
           />
@@ -68,10 +164,16 @@ export function AddTrackerScreen() {
           <YStack gap="$3">
             <SectionTitle>How do you want to track this?</SectionTitle>
             <YStack gap="$2">
-              {trackingMethods.map((method) => (
+              {trackingMethodOptions.map((method) => (
                 <Pressable
                   key={method.value}
-                  onPress={() => setSelectedMethod(method.value)}
+                  onPress={() => {
+                    setValue('method', method.value, {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    });
+                    setCreatedTrackerName(undefined);
+                  }}
                   testID={method.testID}
                 >
                   <Card
@@ -96,7 +198,25 @@ export function AddTrackerScreen() {
                 </Pressable>
               ))}
             </YStack>
+            {errors.method?.message ? (
+              <Text color="$red10" fontSize="$3" role="alert">
+                {errors.method.message}
+              </Text>
+            ) : null}
           </YStack>
+
+          <AppButton
+            disabled={isSubmitting}
+            onPress={submitTracker}
+            testID="create-tracker-button"
+            theme="accent"
+          >
+            {isSubmitting ? 'Creating...' : 'Create tracker'}
+          </AppButton>
+
+          {createdTrackerName ? (
+            <BodyText>Created tracker "{createdTrackerName}".</BodyText>
+          ) : null}
         </YStack>
       </Screen>
     );
