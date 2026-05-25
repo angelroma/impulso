@@ -17,7 +17,7 @@ The app SHALL use a drawer-based navigation shell as the primary app-level navig
 - **THEN** the existing foundation home screen remains reachable from the drawer shell
 
 ### Requirement: Goal Settings Section
-The drawer SHALL include a `Goal settings` section with an `Add tracker` submenu item.
+The drawer SHALL include a `Goal settings` section with an `Add tracker` submenu item that opens the tracker creation starting point.
 
 #### Scenario: Goal settings section is displayed
 - **WHEN** the drawer content is rendered
@@ -30,6 +30,7 @@ The drawer SHALL include a `Goal settings` section with an `Add tracker` submenu
 #### Scenario: Add tracker item navigates
 - **WHEN** the user activates the `Add tracker` submenu item
 - **THEN** the app navigates to the add-tracker route
+- **AND** the route presents the tracker creation starting point
 
 ### Requirement: Options Section
 The drawer SHALL include an `Options` section with a `Settings` submenu item.
