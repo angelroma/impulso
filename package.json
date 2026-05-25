@@ -26,6 +26,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@babel/plugin-proposal-class-properties": "^7.18.6",
+    "@babel/plugin-transform-object-assign": "^7.29.7",
     "@eslint/js": "^9.8.0",
     "@expo/cli": "~54.0.16",
     "@nx/devkit": "22.7.3",
@@ -45,6 +47,7 @@
     "@types/node": "20.19.9",
     "@types/react": "^19.1.0",
     "babel-jest": "~30.3.0",
+    "babel-plugin-no-side-effect-class-properties": "^0.0.7",
     "babel-preset-expo": "~54.0.7",
     "eslint": "^9.8.0",
     "eslint-config-prettier": "^10.0.0",
