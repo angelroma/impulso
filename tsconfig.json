@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compileOnSave": false,
+  "files": [],
+  "references": [
+    {
+      "path": "./apps/cross-platorm-app-e2e"
+    },
+    {
+      "path": "./apps/cross-platorm-app"
+    }
+  ]
+}
