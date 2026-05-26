@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines the first step of tracker creation, including the add-tracker entry option, custom goal starter form, and initial tracking method choices.
-
 ## Requirements
-
 ### Requirement: Add Tracker Entry Option
 The add-tracker screen SHALL present a selectable `Custom goal` option as the starting point for creating a custom tracker.
 
@@ -29,7 +27,7 @@ The custom goal starter form SHALL ask the user to name their goal or habit and 
 - **THEN** the question `How do you want to track this?` is visible
 
 ### Requirement: Tracking Method Choices
-The custom goal starter form SHALL present the initial tracking method choices without continuing into type-specific setup workflows.
+The custom goal starter form SHALL present the initial tracking method choices and continue into Habit setup when the user selects the Habit method.
 
 #### Scenario: Habit method is displayed
 - **WHEN** the custom goal starter form is shown
@@ -47,30 +45,40 @@ The custom goal starter form SHALL present the initial tracking method choices w
 - **WHEN** the custom goal starter form is shown
 - **THEN** a `Target` method option with `number by date` supporting text is visible
 
-#### Scenario: Method selection remains in starter flow
-- **WHEN** the user selects any tracking method option
+#### Scenario: Habit selection opens Habit setup
+- **WHEN** the user has entered a goal or habit name
+- **AND** the user selects the `Habit` tracking method option
+- **THEN** the app opens the Habit setup form
+- **AND** no tracker is created before the Habit setup form is finished
+
+#### Scenario: Non-Habit method selection remains in starter flow
+- **WHEN** the user selects the `Average`, `Project`, or `Target` tracking method option
 - **THEN** the app remains on the custom goal starter form
 - **AND** no tracker is created
+- **AND** the app communicates that setup for the selected method is coming soon
 
 ### Requirement: Custom Goal Starter Submission
-The custom goal starter form SHALL allow the user to create a local tracker after providing a goal name and selecting a tracking method.
+The custom goal starter form SHALL NOT create a local tracker directly; tracker creation SHALL happen at the end of a method-specific setup flow.
 
-#### Scenario: Submit action is displayed after starter fields are ready
-- **WHEN** the custom goal starter form has a goal name
-- **AND** a tracking method is selected
-- **THEN** a submit action for creating the tracker is available
+#### Scenario: Starter create action is not displayed
+- **WHEN** the custom goal starter form is shown
+- **THEN** no starter-level `Create tracker` action is visible
 
-#### Scenario: Tracker is created from valid starter fields
-- **WHEN** the user submits the custom goal starter form with a valid goal name
-- **AND** a tracking method is selected
-- **THEN** the app creates a local tracker with that name and tracking method
+#### Scenario: Non-Habit starter selection does not create tracker
+- **WHEN** the user selects `Average`, `Project`, or `Target` from the custom goal starter form
+- **THEN** no local tracker is created from the starter form
+
+#### Scenario: Habit starter selection does not submit directly
+- **WHEN** the user selects `Habit` from the custom goal starter form
+- **THEN** the app opens Habit setup instead of creating a tracker from the starter form
 
 #### Scenario: Missing goal name prevents tracker creation
 - **WHEN** the user attempts to submit the custom goal starter form without a goal name
 - **THEN** no local tracker is created
 - **AND** the form communicates that the goal name is required
 
-#### Scenario: Missing tracking method prevents tracker creation
-- **WHEN** the user attempts to submit the custom goal starter form without selecting a tracking method
+#### Scenario: Missing tracking method has no starter submit state
+- **WHEN** the user has not selected a tracking method
 - **THEN** no local tracker is created
-- **AND** the form communicates that the tracking method is required
+- **AND** no starter-level submit action is visible
+

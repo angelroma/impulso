@@ -10,6 +10,7 @@
     "@expo/metro-config": "*",
     "@expo/vector-icons": "^15.0.3",
     "@hookform/resolvers": "*",
+    "@react-native-community/datetimepicker": "8.4.4",
     "@react-navigation/drawer": "^7.10.3",
     "@tamagui/config": "*",
     "@testing-library/react-native": "*",

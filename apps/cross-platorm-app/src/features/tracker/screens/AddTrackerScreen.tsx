@@ -17,10 +17,12 @@ import { useDatabase } from '../../../shared/database';
 import {
   createTrackerRepository,
   createWebTrackerRepository,
+  CreateHabitSetupInput,
   TrackerRepository,
   trackingMethods,
   TrackingMethod,
 } from '../data';
+import { HabitSetupScreen } from './HabitSetupScreen';
 
 type TrackingMethodOption = {
   description: string;
@@ -86,10 +88,7 @@ export function AddTrackerScreen({ trackerRepository }: AddTrackerScreenProps) {
 }
 
 function AsyncSqliteBackedAddTrackerScreen() {
-  const trackerRepository = useMemo(
-    () => createWebTrackerRepository(),
-    [],
-  );
+  const trackerRepository = useMemo(() => createWebTrackerRepository(), []);
 
   return <AddTrackerScreenContent trackerRepository={trackerRepository} />;
 }
@@ -111,12 +110,14 @@ function AddTrackerScreenContent({
 }) {
   const [isCustomGoalFormVisible, setIsCustomGoalFormVisible] = useState(false);
   const [createdTrackerName, setCreatedTrackerName] = useState<string>();
+  const [habitSetupName, setHabitSetupName] = useState<string>();
   const {
     control,
-    formState: { errors, isSubmitting },
-    handleSubmit,
+    formState: { errors },
     reset,
+    getValues,
     setValue,
+    trigger,
     watch,
   } = useForm<CustomGoalStarterValues>({
     defaultValues: {
@@ -128,20 +129,56 @@ function AddTrackerScreenContent({
   useController({ control, name: 'method' });
 
   const selectedMethod = watch('method');
+  const [isCreatingHabit, setIsCreatingHabit] = useState(false);
 
-  const submitTracker = handleSubmit(async (values) => {
-    if (!values.method) {
+  const openHabitSetup = async () => {
+    const isNameValid = await trigger('name');
+
+    if (!isNameValid) {
       return;
     }
 
-    const tracker = await trackerRepository.createTracker({
-      method: values.method,
-      name: values.name,
+    setValue('method', 'habit', {
+      shouldDirty: true,
+      shouldValidate: true,
     });
+    setCreatedTrackerName(undefined);
+    setHabitSetupName(getValues('name').trim());
+  };
 
-    setCreatedTrackerName(tracker.name);
-    reset({ method: undefined, name: '' });
-  });
+  const finishHabitSetup = async (habitSetup: CreateHabitSetupInput) => {
+    if (!habitSetupName) {
+      return;
+    }
+
+    setIsCreatingHabit(true);
+
+    try {
+      const result = await trackerRepository.createHabitTracker({
+        habitSetup,
+        name: habitSetupName,
+      });
+
+      setCreatedTrackerName(result.tracker.name);
+      setHabitSetupName(undefined);
+      reset({ method: undefined, name: '' });
+    } finally {
+      setIsCreatingHabit(false);
+    }
+  };
+
+  if (habitSetupName) {
+    return (
+      <Screen testID="habit-setup-route-screen">
+        <HabitSetupScreen
+          habitName={habitSetupName}
+          isSubmitting={isCreatingHabit}
+          onBack={() => setHabitSetupName(undefined)}
+          onFinish={finishHabitSetup}
+        />
+      </Screen>
+    );
+  }
 
   if (isCustomGoalFormVisible) {
     return (
@@ -168,6 +205,11 @@ function AddTrackerScreenContent({
                 <Pressable
                   key={method.value}
                   onPress={() => {
+                    if (method.value === 'habit') {
+                      void openHabitSetup();
+                      return;
+                    }
+
                     setValue('method', method.value, {
                       shouldDirty: true,
                       shouldValidate: true,
@@ -205,14 +247,11 @@ function AddTrackerScreenContent({
             ) : null}
           </YStack>
 
-          <AppButton
-            disabled={isSubmitting}
-            onPress={submitTracker}
-            testID="create-tracker-button"
-            theme="accent"
-          >
-            {isSubmitting ? 'Creating...' : 'Create tracker'}
-          </AppButton>
+          {selectedMethod && selectedMethod !== 'habit' ? (
+            <BodyText>
+              {getMethodLabel(selectedMethod)} setup is coming soon.
+            </BodyText>
+          ) : null}
 
           {createdTrackerName ? (
             <BodyText>Created tracker "{createdTrackerName}".</BodyText>
@@ -245,5 +284,12 @@ function AddTrackerScreenContent({
         </YStack>
       </Card>
     </Screen>
+  );
+}
+
+function getMethodLabel(method: TrackingMethod) {
+  return (
+    trackingMethodOptions.find((option) => option.value === method)?.label ??
+    'Tracker'
   );
 }
