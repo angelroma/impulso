@@ -48,3 +48,9 @@ Thumbs.db
 .nx/polygraph
 .nx/self-healing
 .nx/migrate-runs
+
+# Local task scratch files and browser verification captures.
+/work/
+
+# Browser assets bundled into the authorization Edge Function by the build-auth target.
+/apps/supabase/functions/impulso-auth/_generated/

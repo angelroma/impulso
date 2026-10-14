@@ -4,14 +4,17 @@
   "license": "MIT",
   "scripts": {},
   "private": true,
-  "dependencies": {},
   "devDependencies": {
     "@nx/js": "23.2.0",
+    "@supabase/supabase-js": "2.117.3",
     "@swc-node/register": "1.11.1",
     "@swc/core": "1.15.8",
     "@swc/helpers": "0.5.18",
     "@types/node": "^24.0.0",
+    "deno": "2.9.6",
+    "esbuild": "0.28.2",
     "nx": "23.2.0",
+    "postgres": "3.4.9",
     "prettier": "^3.8.1",
     "tslib": "^2.3.0",
     "typescript": "~6.0.3"

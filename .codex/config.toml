@@ -2,6 +2,10 @@
 command = "npx"
 args = [ "nx", "mcp", "--minimal" ]
 
+[mcp_servers.impulso]
+url = "https://txoorpmblpvqveeudafv.supabase.co/functions/v1/impulso-api/mcp"
+scopes = ["openid", "email", "profile", "offline_access"]
+
 [features]
 multi_agent = true
 

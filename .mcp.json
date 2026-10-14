@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "impulso": {
+      "type": "http",
+      "url": "https://txoorpmblpvqveeudafv.supabase.co/functions/v1/impulso-api/mcp",
+      "oauth": {
+        "scopes": "openid email profile offline_access"
+      }
+    }
+  }
+}

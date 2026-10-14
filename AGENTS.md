@@ -21,3 +21,17 @@
 - The `nx-generate` skill handles generator discovery internally - don't call nx_docs just to look up generator syntax
 
 <!-- nx configuration end-->
+
+## Implementation language
+
+All code and implementation artifacts created for Impulso must be written in English. This includes source code, identifiers, schemas, tables, columns, views, functions, procedures, triggers, policies, constraints, indexes, migrations, storage buckets, API endpoints, tool names, roles, enum and state values, configuration, file and folder names, comments, docstrings, tests, logs, error codes, technical documentation, interface text and system-generated messages.
+
+Use English snake_case for PostgreSQL identifiers and enum/state values. Follow the framework's naming conventions for code while keeping all names in English. Keep the brand names Impulso and @Impulso unchanged.
+
+User-provided names, aliases, descriptions, notes and documents must retain their original language and content. This rule does not require translating user data. System-generated defaults must be in English, including the initial self alias "me".
+
+## Database responsibilities
+
+Keep application business logic and MCP tools in TypeScript Supabase Edge Functions. Do not create custom PostgreSQL functions, procedures or application triggers, including custom SQL test helpers. The declarative database model contains tables, native constraints, indexes, RLS and privileges. Preserve Supabase-managed Auth and Storage objects and PostgreSQL built-ins.
+
+Use the complete declarative tree in `apps/supabase/schemas` as the desired schema and keep reviewed chronological changes in `apps/supabase/migrations`. Historical migration definitions may include removed objects; do not restore those objects in the current model. Tests may call pgTAP's built-in assertions without defining custom functions.

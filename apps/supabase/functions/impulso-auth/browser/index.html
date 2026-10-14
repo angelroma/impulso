@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-authorization-base-path="/functions/v1/impulso-auth">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Impulso — Connect your client</title>
+    <link rel="stylesheet" href="/functions/v1/impulso-auth/styles.css" />
+    <script type="module" src="/functions/v1/impulso-auth/auth.js"></script>
+  </head>
+  <body>
+    <main>
+      <p class="brand">Impulso <span class="badge">Local</span></p>
+      <h1>Connect. Then continue in your conversation.</h1>
+      <p id="intro">
+        Use Impulso from an MCP client that supports OAuth. Account setup
+        happens in your conversation.
+      </p>
+      <section id="home">
+        <h2>Local MCP server</h2>
+        <code>http://127.0.0.1:54321/functions/v1/impulso-api/mcp</code>
+        <p>
+          Add this server in a compatible client running on this computer. When
+          it asks to connect, sign in with Google and review its access here.
+        </p>
+      </section>
+      <p id="message" role="status" aria-live="polite">Loading…</p>
+      <p id="account" hidden></p>
+      <button id="sign-in" type="button" hidden>Continue with Google</button>
+      <section id="consent" hidden>
+        <h2><span id="client-name"></span> wants to connect</h2>
+        <p>Only approve a client whose connection you just started.</p>
+        <dl>
+          <dt>Client ID</dt>
+          <dd id="client-id"></dd>
+          <dt>Return address</dt>
+          <dd id="client-callback"></dd>
+        </dl>
+        <h3>Requested information</h3>
+        <ul id="scopes"></ul>
+        <p>
+          This connection can check your signed-in account and set up your
+          personal workspace when you ask in the conversation.
+        </p>
+        <div class="actions">
+          <button id="approve" type="button">Allow connection</button>
+          <button id="deny" class="secondary" type="button">Deny</button>
+        </div>
+      </section>
+      <button id="sign-out" class="secondary" type="button" hidden>
+        Use another account
+      </button>
+    </main>
+  </body>
+</html>
