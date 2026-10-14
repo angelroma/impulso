@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Describe the existing Impulso Edge Function authentication boundary and its two account-setup MCP tools. Finance, Health, sharing, file services, and arbitrary SQL execution are outside the implemented tool surface. The conversation itself follows the separate [conversational onboarding specification](../conversational-onboarding/spec.md).
+Describe Impulso's authenticated Edge Function boundary for account setup and the local Finance context, book/account creation, and expense tools. The active Finance change tracks the expanded requirements until spec synchronization; hosted deployment is verified separately. Broader Finance operations, Health, sharing, files, and arbitrary SQL remain outside this surface. Setup follows the separate [conversational onboarding specification](../conversational-onboarding/spec.md).
 
 ## Requirements
 
@@ -53,28 +53,40 @@ Direct onboarding SHALL require a confirmed, server-verified Google identity and
 
 ### Requirement: Current session and consent state are checked again
 
-The backend SHALL verify that the session exists, belongs to the verified user, and has not reached its end time. Delegated requests SHALL additionally match a nondeleted OAuth client, the session's complete scope set, and unrevoked consent covering every token scope. These checks SHALL run per protected request and again inside account-status and onboarding transactions.
+The backend SHALL verify that the session exists, belongs to the verified user, and has not reached its end time. Delegated requests SHALL additionally match a nondeleted OAuth client, the session's complete scope set, and unrevoked consent covering every token scope. These checks SHALL run per protected request and again inside account-status, onboarding, Finance context, and Finance mutation transactions.
 
 #### Scenario: A previously issued token loses its session or consent
 
 - **WHEN** a session is removed or expired, its client is deleted, consent is revoked, or scope state no longer matches
 - **THEN** reuse of the otherwise unexpired token is rejected by the active-state checks
 
-### Requirement: Stateless MCP exposes only two strict account tools
+#### Scenario: Financial work uses previously discovered context
 
-The API SHALL use stateless Streamable HTTP with a separate verified identity and server instance for each request. The advertised tools SHALL be only `get_session` and `onboard`; neither SHALL accept tokens, passwords, SQL, actor identifiers, raw location context, or domain records. OAuth registration, authorization-code exchange, and refresh SHALL remain Supabase Auth responsibilities.
+- **WHEN** a Finance operation starts after the client obtained authorized book or account context
+- **THEN** the transaction rechecks current session and consent state before returning scoped data or committing a mutation
+- **AND** cached discovery cannot override a revoked connection
+
+### Requirement: Stateless MCP exposes only the supported strict tools
+
+The API SHALL use stateless Streamable HTTP with a separate verified identity and server instance for each request. Its only tools SHALL be `get_session`, `onboard`, `get_finance_context`, `create_book`, `create_account`, and `record_expense`, each with closed inputs. None SHALL accept tokens, passwords, SQL, actor IDs, raw location context, or arbitrary records. OAuth registration, authorization-code exchange, and refresh SHALL remain Supabase Auth responsibilities.
 
 #### Scenario: A connected client lists tools
 
 - **WHEN** an authorized client initializes MCP and lists available tools
-- **THEN** it receives only the two account tools and the current conversational setup instructions
-- **AND** no Finance, Health, arbitrary SQL, or file operation is advertised
+- **THEN** it receives the two unchanged account tools, the four Finance tools, and the current conversational guidance
+- **AND** no Health, income, transfer, correction, arbitrary SQL, balance-reporting, or file operation is advertised
 
 #### Scenario: Different callers use MCP concurrently
 
 - **WHEN** simultaneous requests belong to different verified users
 - **THEN** each tool invocation uses its request's verified identity
 - **AND** transport state does not share one caller's identity with another
+
+#### Scenario: Existing account clients keep their contracts
+
+- **WHEN** an existing client invokes `get_session` or `onboard` after Finance tools are added
+- **THEN** the existing input and output shapes, Google identity checks, onboarding confirmation, and retry semantics remain unchanged
+- **AND** Finance context and records use their own strictly validated tool contracts
 
 ### Requirement: Session inspection reports setup state without creating resources
 

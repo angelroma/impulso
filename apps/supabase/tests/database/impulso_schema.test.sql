@@ -26,6 +26,23 @@ INSERT INTO expected_tables VALUES
   ('finance', 'budgets'),
   ('finance', 'book_access'),
   ('finance', 'files'),
+  ('finance', 'categories'),
+  ('finance', 'transaction_groups'),
+  ('finance', 'transaction_classifications'),
+  ('finance', 'recurring_rules'),
+  ('finance', 'recurring_rule_lines'),
+  ('finance', 'planned_items'),
+  ('finance', 'planned_item_lines'),
+  ('finance', 'planned_item_allocations'),
+  ('finance', 'debt_details'),
+  ('finance', 'savings_goals'),
+  ('finance', 'goal_allocations'),
+  ('finance', 'assets'),
+  ('finance', 'asset_valuations'),
+  ('finance', 'import_batches'),
+  ('finance', 'import_rows'),
+  ('finance', 'monthly_summaries'),
+  ('finance', 'report_coverage'),
   ('health', 'records'),
   ('health', 'medications'),
   ('health', 'appointments'),
@@ -97,9 +114,45 @@ FROM (VALUES ('auth_users'), ('auth_sessions')) AS views(view_name);
 SELECT is(
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname IN ('core', 'finance', 'health', 'audit', 'private') AND c.relkind IN ('r', 'p')),
-  23::bigint,
-  'The initial model contains exactly 23 application tables'
+  40::bigint,
+  'The extended model contains exactly 40 application tables'
 );
+
+SELECT ok(
+  has_schema_privilege('impulso_backend', 'finance', 'USAGE')
+    AND has_table_privilege('impulso_backend', 'finance.' || table_name, 'SELECT')
+    AND has_table_privilege('impulso_backend', 'finance.' || table_name, 'INSERT')
+    AND NOT has_table_privilege('impulso_backend', 'finance.' || table_name, 'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),
+  'Finance service can read and insert ' || table_name || ' without broad modification rights'
+)
+FROM (VALUES ('books'), ('book_access'), ('accounts'), ('transactions')) AS tables(table_name);
+
+SELECT ok(
+  has_column_privilege('impulso_backend', 'finance.' || table_name, column_name, 'UPDATE'),
+  'Finance service can lock ' || table_name || ' through its metadata privilege'
+)
+FROM (VALUES ('books', 'updated_at'), ('accounts', 'updated_at'), ('book_access', 'granted_at')) AS locks(table_name, column_name);
+
+SELECT ok(
+  NOT has_column_privilege('impulso_backend', c.oid, a.attname, 'UPDATE'),
+  'Finance service cannot edit finance.' || c.relname || '.' || a.attname
+)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+WHERE n.nspname = 'finance' AND c.relname IN ('books', 'book_access', 'accounts', 'transactions')
+  AND NOT (c.relname IN ('books', 'accounts') AND a.attname = 'updated_at')
+  AND NOT (c.relname = 'book_access' AND a.attname = 'granted_at')
+  AND NOT (c.relname = 'accounts' AND a.attname IN ('account_kind', 'opening_balance_on', 'version', 'updated_by_user_id'))
+  AND NOT (c.relname = 'transactions' AND a.attname IN ('voided_at', 'voided_by_user_id', 'void_reason', 'version', 'updated_at', 'updated_by_user_id'))
+ORDER BY c.relname, a.attname;
+
+SELECT ok(
+  NOT has_table_privilege('impulso_backend', schema_name || '.' || table_name, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+    AND NOT has_any_column_privilege('impulso_backend', schema_name || '.' || table_name, 'SELECT,INSERT,UPDATE,REFERENCES'),
+  'Finance service cannot access ' || schema_name || '.' || table_name
+)
+FROM (VALUES ('finance', 'files'), ('health', 'records'), ('health', 'files')) AS denied(schema_name, table_name);
 
 SELECT ok(coalesce(c.relrowsecurity, false), e.schema_name || '.' || e.table_name || ' enables RLS')
 FROM expected_tables e

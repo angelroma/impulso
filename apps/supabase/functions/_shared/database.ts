@@ -64,6 +64,49 @@ export function sessionIsActive(database: Database, identity: VerifiedIdentity):
   });
 }
 
+export async function withIdentityTransaction<T>(
+  database: Database,
+  identity: VerifiedIdentity,
+  operation: (sql: Transaction) => Promise<T>,
+  requestId?: string,
+): Promise<T> {
+  if (requestId !== undefined && !isUuid(requestId)) {
+    throw new ApiError(400, "invalid_request_id", "A valid request identifier is required.");
+  }
+  try {
+    return await database.begin(async (sql) => {
+      await setTransactionLimits(sql);
+      if (!await hasActiveSession(sql, identity)) {
+        throw new ApiError(401, "invalid_session", "A valid signed-in user session is required.");
+      }
+      // Every writer takes its request lock before account or workspace locks.
+      if (requestId !== undefined) {
+        await sql`
+          SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${requestId}, 0))
+        `;
+      }
+      const result = await operation(sql);
+      // Resource locks may have waited while delegated consent was revoked.
+      if (!await hasActiveSession(sql, identity)) {
+        throw new ApiError(401, "invalid_session", "A valid signed-in user session is required.");
+      }
+      return result;
+    }) as T;
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error
+      ? String(error.code)
+      : "";
+    if (!(error instanceof ApiError) && ["55P03", "40P01", "40001", "57014"].includes(code)) {
+      throw new ApiError(
+        503,
+        "operation_retry_required",
+        "The operation is temporarily busy. Retry with the same request identifier and unchanged values.",
+      );
+    }
+    throw error;
+  }
+}
+
 export interface WorkspaceAccess {
   readonly workspace_id: string;
   readonly member_role: "owner" | "member";
@@ -78,11 +121,7 @@ export function withWorkspaceTransaction<T>(
   if (!isUuid(workspaceId)) {
     throw new ApiError(400, "invalid_workspace_id", "A valid workspace identifier is required.");
   }
-  return database.begin(async (sql) => {
-    await setTransactionLimits(sql);
-    if (!await hasActiveSession(sql, identity)) {
-      throw new ApiError(401, "invalid_session", "A valid signed-in user session is required.");
-    }
+  return withIdentityTransaction(database, identity, async (sql) => {
     const [workspace] = await sql<{ archived_at: Date | null }[]>`
       SELECT archived_at FROM core.workspaces WHERE id = ${workspaceId} FOR UPDATE
     `;

@@ -7,10 +7,11 @@ This directory is the home for Impulso's technical documentation. Start with the
 | Specification | Covers |
 | --- | --- |
 | [Database model](specs/database-model/spec.md) | Domain boundaries, native integrity, restricted access, and the division between PostgreSQL and TypeScript responsibilities. |
-| [MCP authentication](specs/mcp-authentication/spec.md) | Google identity, Supabase OAuth/session checks, MCP discovery, and the two implemented tools. |
+| [MCP authentication](specs/mcp-authentication/spec.md) | Google identity, Supabase OAuth/session checks, MCP discovery, and the baseline account-tool requirements. |
 | [Conversational onboarding](specs/conversational-onboarding/spec.md) | Suggested workspace names, friendly time-zone assistance, confirmation, and setup through the conversation. |
+| [Finance expenses](specs/finance-expenses/spec.md) | Authorized financial choices, accepted book/account setup, exact expense recording and safe retries. |
 
-The database and MCP authentication specs backfill existing implementation. The onboarding spec records the completed onboarding change. New product behavior should be proposed as a change before implementation.
+The completed [conversational expense change](changes/add-conversational-expense-recording/proposal.md) has been synchronized into the main specifications and remains unarchived. The [personal finance planning adaptation](changes/adapt-finance-to-personal-planning/proposal.md) contains nine deltas covering the extended ledger, budgets and expected activity, debts, wealth, reports, reviewed imports and their database/MCP boundaries. Consult its [verification record](changes/adapt-finance-to-personal-planning/verification.md) for observed local results. Those deltas remain in the active change until normal synchronization. New product behavior should be proposed as a change before implementation.
 
 ## Operating guides
 
@@ -26,7 +27,7 @@ These procedures include commands that can change a running environment. Reading
 
 ## Reference and history
 
-- [Database catalogue](reference/database-catalogue.md): purposes and SQL sources for all 23 application tables and four private Auth views.
+- [Database catalogue](reference/database-catalogue.md): purposes and SQL sources for all 40 application tables and four private Auth views.
 - [Reference index](reference/README.md): provenance, historical path mapping, and implemented versus planned status.
 - [Original data model](reference/original-data-model.md): the original design, preserved in its original language; consult the reference index before using it as implementation guidance.
 - [Authorization Site identity](reference/authorization-site.json): the existing public deployment identity and expected origin.
@@ -35,7 +36,9 @@ These procedures include commands that can change a running environment. Reading
 
 ## Implementation boundary
 
-Google sign-in, OAuth connection, session inspection, and personal workspace onboarding are implemented. The MCP tool surface currently contains only `get_session` and `onboard`. Finance and Health tables exist; recording an expense, managing health data, sharing, uploads, and purge services still require application work.
+Local source and hosted API version 3 expose 20 MCP tools. The original six account/setup/expense contracts remain available. Five ledger tools add account metadata, categories, typed income/expense/transfers, corrections and bounded history. Five planning tools manage budgets, commitments, debt metadata, savings goals and manual assets. `get_finance_report` provides exact dated measures with explicit completeness and evidence. Three import tools separate frozen preview, accepted atomic commit and bounded status reads. See the [service catalogue](guides/local-development.md#mcp-tools) and [synthetic walkthrough](changes/adapt-finance-to-personal-planning/synthetic-acceptance.md).
+
+The authorized remote rollout applied the six pending migrations, bringing the hosted database to ten migration versions and 40 RLS-enabled application tables. ChatGPT's refreshed plugin lists all 20 tools, and an actual OAuth `get_session` call confirmed completed onboarding. The [rollout verification](guides/remote-deployment.md#finance-rollout-verification) distinguishes that hosted evidence from the earlier local test results. Existing user records were preserved; deployment created no salary, financial records or live workbook imports and made no source-sheet repairs. New managed people, sharing, Health, files and purge execution remain pending. See [local development](guides/local-development.md) for contracts and local verification status.
 
 The desired SQL structure stays in [apps/supabase/schemas](../apps/supabase/schemas), with reviewed chronological changes in [apps/supabase/migrations](../apps/supabase/migrations). Business logic and MCP tools stay in [TypeScript Edge Functions](../apps/supabase/functions). Custom PostgreSQL functions, procedures, and application triggers are excluded from the current model.
 

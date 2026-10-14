@@ -16,6 +16,8 @@ CREATE TABLE finance.accounts (
     currency text NOT NULL,
     name text NOT NULL,
     person_id uuid,
+    account_kind text NOT NULL DEFAULT 'unknown' CHECK (account_kind IN ('unknown', 'cash', 'bank', 'investment', 'credit_card', 'loan')),
+    opening_balance_on date CHECK (opening_balance_on BETWEEN DATE '0001-01-01' AND DATE '9999-12-31'),
     opening_balance numeric(20,4) NOT NULL CHECK (opening_balance > '-Infinity'::numeric AND opening_balance < 'Infinity'::numeric),
     FOREIGN KEY (workspace_id, book_id, currency) REFERENCES finance.books(workspace_id, id, currency) ON DELETE RESTRICT,
     FOREIGN KEY (workspace_id, person_id) REFERENCES core.people(workspace_id, id) ON DELETE RESTRICT,

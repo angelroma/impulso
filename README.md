@@ -1,6 +1,6 @@
 # Impulso
 
-Impulso connects AI clients to a modular Supabase backend for personal workspaces, finance, and health. Google sign-in, OAuth connection, session inspection, and conversational onboarding are implemented; Finance and Health application operations are still pending.
+Impulso connects AI clients to a modular Supabase backend for personal workspaces, finance, and health. Local source and the hosted version 3 API provide Google sign-in, OAuth, conversational onboarding, financial setup, an exact ledger, budgets and commitments, debt and wealth tracking, reports, and reviewed historical imports through 20 MCP tools. The remote database has ten reviewed migrations and 40 application tables; [rollout verification](openspec/guides/remote-deployment.md#finance-rollout-verification) records refreshed plugin discovery and the authenticated session check. No salary, financial records or live workbook imports were created during deployment. Health operations remain pending.
 
 Start with the [documentation index](openspec/README.md). All project technical documentation lives in `openspec`:
 

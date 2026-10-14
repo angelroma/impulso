@@ -183,7 +183,9 @@ Deno.test("Local onboarding is atomic, idempotent, session-bound and isolated", 
           !role.rolcreaterole && !role.rolinherit,
         "Integration onboarding must use a restricted service role with no administrative flags.",
       );
-      await expectPrivilegeDenied(() => serviceDatabase`SELECT id FROM finance.books LIMIT 0`);
+      await serviceDatabase`SELECT id FROM finance.books LIMIT 0`;
+      await serviceDatabase`SELECT id FROM finance.budgets LIMIT 0`;
+      await expectPrivilegeDenied(() => serviceDatabase`SELECT id FROM finance.files LIMIT 0`);
       await expectPrivilegeDenied(() => serviceDatabase`SELECT id FROM health.records LIMIT 0`);
       await expectPrivilegeDenied(() => serviceDatabase`DELETE FROM core.people WHERE false`);
       await expectPrivilegeDenied(

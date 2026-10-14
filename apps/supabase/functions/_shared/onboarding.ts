@@ -1,5 +1,5 @@
 import { isUuid, type VerifiedIdentity } from "./auth.ts";
-import { type Database, hasActiveSession, type Transaction } from "./database.ts";
+import { type Database, type Transaction, withIdentityTransaction } from "./database.ts";
 import { ApiError } from "./http.ts";
 
 export interface OnboardingInput {
@@ -152,16 +152,7 @@ export async function onboard(
   input: OnboardingInput,
 ): Promise<OnboardingResult> {
   const hash = await payloadHash(input);
-  return await database.begin(async (sql) => {
-    await sql`SET LOCAL statement_timeout = '5s'`;
-    await sql`SET LOCAL lock_timeout = '3s'`;
-    if (!await hasActiveSession(sql, identity)) {
-      throw new ApiError(401, "invalid_session", "A valid signed-in user session is required.");
-    }
-    // Request locks serialize retries; the account lock also serializes different request keys.
-    await sql`
-      SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${input.request_id}, 0))
-    `;
+  return await withIdentityTransaction(database, identity, async (sql) => {
     const [receipt] = await sql<Receipt[]>`
       SELECT actor_user_id, workspace_id, operation,
         pg_catalog.encode(payload_hash, 'hex') AS payload_hash, resource_ids, status
@@ -252,5 +243,5 @@ export async function onboard(
     `;
     await writeReceipt(sql, identity, input, hash, workspaceId, personId);
     return { workspace_id: workspaceId, person_id: personId, status: "created" };
-  }) as OnboardingResult;
+  }, input.request_id);
 }

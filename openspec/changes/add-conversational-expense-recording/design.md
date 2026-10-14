@@ -103,7 +103,7 @@ Update the documentation index, catalogue service-use descriptions, local testin
 ## Migration Plan
 
 1. Implement and test contracts/validation, narrow grants and reviewed migration, transactional context/services, and MCP wiring through the existing Nx targets.
-2. Apply only reviewed local migrations and run pgTAP, function unit/type/lint, and local integration checks with disposable fixtures. Ensure the integration launcher includes any new Finance test suite; its current suite list is explicit.
+2. Apply only reviewed local migrations and run pgTAP, function unit/type/lint, and local integration checks with disposable fixtures. Ensure the integration launcher's existing test-directory discovery includes the new Finance suite.
 3. Update operating documentation and current scope descriptions, validate the delta set, and keep the production plugin's existing behavior until deployment.
 4. A remote rollout is a separate action: inspect the destination and migration diff, apply the reviewed privilege migration before deploying code, deploy the existing function, refresh client tools, and perform an authorized smoke check without creating a real expense unless requested.
 

@@ -9,12 +9,13 @@ import {
   handleMcpRequest,
   mcpChallenge,
   type McpConfiguration,
+  type McpDependencies,
   type OnboardingStatus,
   protectedResourceMetadata,
   requireMcpIdentity,
 } from "./mcp.ts";
 
-export interface HandlerDependencies {
+export interface HandlerDependencies extends McpDependencies {
   readonly authenticate: (request: Request) => Promise<VerifiedIdentity>;
   readonly onboard?: (
     identity: VerifiedIdentity,

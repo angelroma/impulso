@@ -4,9 +4,17 @@ Impulso's remote project is `txoorpmblpvqveeudafv`. Its API origin is `https://t
 
 The public authorization page is published at `https://impulso-authorization.marmstud6.chatgpt.site` using the existing ChatGPT Site `appgprj_6acebb194398819192eeb6ec946a8c7b`. Its durable identity is in [authorization-site.json](../reference/authorization-site.json); reuse this ID when recovering the ignored Site checkout. This guide records deployment procedures and evidence; current product requirements live in [MCP authentication](../specs/mcp-authentication/spec.md), [database model](../specs/database-model/spec.md) and [conversational onboarding](../specs/conversational-onboarding/spec.md).
 
+## Finance rollout boundary
+
+The current remote deployment is `impulso-api` version 3 with all 20 tools, 40 application tables and ten reviewed migrations. The authorized Finance rollout applied the six chronological migrations after the earlier four-version baseline, then deployed the matching backend and refreshed the existing ChatGPT plugin. Its authenticated session and Finance context reads passed. The [rollout verification](#finance-rollout-verification) below records observed results; the [personal planning change](../changes/adapt-finance-to-personal-planning/verification.md) preserves the preceding local implementation evidence.
+
+For subsequent rollouts, verify the Personal identity and destination, inspect pending migrations and the dry-run diff, apply reviewed chronological changes before deploying matching `impulso-api` source, then refresh client tool discovery. Reverify the expected manifest, original contracts, OAuth/session protection and authorized reads without creating real financial activity. Before any real import, separately review the workbook's source ranges, explicit currency, actual versus planned roles, account/category mappings, opening cutoffs, coverage and unresolved reconciliation. This rollout changed neither OAuth scopes nor authorization hosting.
+
+If a rollout must be reversed, redeploy the previous function first and preserve committed ledger and import evidence. Remove added privileges only through a reviewed forward migration after no deployed source needs them; do not reset the remote database or delete financial records as rollback. New managed people, sharing, Health, files, automatic bank/payment execution, exchange-rate conversion and purge execution remain outside this rollout.
+
 ## Verified status on October 13, 2026
 
-These are recorded observations from the implementation and connection work, not a live health check performed by this documentation migration. Reverify the relevant stage after future changes.
+These are recorded observations from the earlier implementation and connection work, not a live health check for the Finance source. Reverify the relevant stage after future changes.
 
 The remote database was created and checked: 23 application tables across six schemas, RLS on all 23 tables, four private Auth views, and no custom application PostgreSQL functions or triggers. Four reviewed migration versions were reconciled with the deployed schema. The native CLI listed all four versions and its database push dry run reported that the remote database was up to date.
 
@@ -22,7 +30,7 @@ Personal-account CLI identity and access to the Impulso project are verified. Th
 
 The remote security adviser reported no WARN or ERROR findings. Its one INFO finding, `rls_enabled_no_policy`, reflected the intentional denial of direct client access to application tables.
 
-The `impulso-api` Edge Function is deployed and active at version 2, with bundle SHA-256 `8acc712544a04415f92a5ea420b02feef59b33a209085d3a616db3694d6e43f2`. The retrieved remote `mcp.ts` matches the reviewed local source after line-ending normalization. The initial deployment's health and MCP metadata checks returned `200`, unsigned session and MCP requests returned `401`, and the browser CORS preflight returned `204`.
+The recorded `impulso-api` Edge Function deployment is active at version 2, with bundle SHA-256 `8acc712544a04415f92a5ea420b02feef59b33a209085d3a616db3694d6e43f2`. At that verification stage, retrieved remote `mcp.ts` matched the then-reviewed account-tool source after line-ending normalization; it does not match the later local Finance additions. The initial deployment's health and MCP metadata checks returned `200`, unsigned session and MCP requests returned `401`, and the browser CORS preflight returned `204`.
 
 Google sign-in, the backend `/session` check of the active Google session and hosted database, consent approval and the OAuth return completed successfully. ChatGPT plugin `plugin_asdk_app_6acec007862c81918453ab99b17d90a0` is connected: its native page shows `Try in chat` and no longer shows `Continue connecting app`.
 
@@ -83,7 +91,7 @@ IMPULSO_ALLOWED_ORIGINS=https://impulso-authorization.marmstud6.chatgpt.site
 
 Use `supabase secrets set --env-file <private-deployment-file> --project-ref txoorpmblpvqveeudafv --profile $impulsoProfile` with a private file outside version control. Do not copy the local database connection into the remote runtime. The static browser configuration uses only `IMPULSO_AUTH_API_URL` and a publishable `IMPULSO_AUTH_PUBLIC_KEY`, as described in the hosting guide.
 
-The API function is already deployed and active. Redeploy source changes from the existing configuration:
+The version 3 Finance API is deployed. For future updates, review and apply every pending chronological migration to the verified remote destination before deploying matching source. The following command deploys code only; it does not apply database migrations:
 
 ```powershell
 npx supabase@2.120.0 functions deploy impulso-api --project-ref txoorpmblpvqveeudafv --workdir apps --profile $impulsoProfile
@@ -93,7 +101,29 @@ Its configured gateway JWT check is disabled because the TypeScript handler vali
 
 The published page's HTTP routes and security headers have passed verification. Repeat those delivery checks after publication changes. Windows source packaging requires Git for Windows' `bin` directory on the helper process PATH and `TAR_OPTIONS=--force-local`; see the hosting guide for the exact process settings.
 
-The browser OAuth connection, authenticated hosted `/session` check, authenticated MCP handshake/discovery and actual plugin `get_session` call passed during the recorded verification. A later accepted conversational onboarding also completed. After future metadata deployments, refresh client tool discovery and verify a fresh client receives the [canonical conversational guidance](../specs/conversational-onboarding/spec.md). Test denial on a separate request and confirm a revoked session is rejected; these remote checks remain pending. Finance, Health, sharing, files and purge services remain unimplemented even though their database tables exist.
+The earlier browser OAuth connection, authenticated hosted `/session` check, MCP handshake/discovery and plugin `get_session` call passed; accepted conversational onboarding subsequently completed. The Finance rollout below additionally verified the refreshed 20-tool metadata and authenticated Finance context. After future metadata deployments, refresh discovery and verify a fresh client receives the [onboarding guidance](../specs/conversational-onboarding/spec.md) and [Finance guidance](local-development.md#finance-contracts-and-transactions). Remote real-data mutations and destructive consent-revocation testing are separate verification stages; local disposable integration covers those boundaries. Managed-person lifecycle, sharing, Health, files and purge execution remain unsupported.
+
+## Finance rollout verification
+
+Verified on October 14, 2026 UTC (October 13 in Mexico City), after the user explicitly authorized remote migrations, backend publication and plugin refresh. The destination was the existing healthy Personal-account project `txoorpmblpvqveeudafv`, running PostgreSQL 17.11. No new project, Site, OAuth client or credential was created.
+
+The pinned CLI dry run identified exactly six pending migration files: `20261014010925`, `20261014015028`, `20261014015155`, `20261014015535`, `20261014020347` and `20261014021054`. A duplicate-budget compatibility query returned zero conflicts. All six files applied successfully in order with Vault updates skipped and without seed/reset. The post-deployment dry run reports `upToDate: true` and no pending migrations.
+
+Only `impulso-api` was deployed, advancing version 2 to **version 3**, status `ACTIVE`, with bundle SHA-256 `4ce4dfcef78ee2b764a7190468828d3e2c25147f298a04b74f608a2ea32c8de7`. The deployed source retrieval includes all 21 runtime TypeScript files. Gateway JWT verification remains disabled because the handler verifies live user/session/client/Google authorization. Existing runtime secrets and the published authorization Site were retained.
+
+Remote structural and privilege checks confirmed:
+
+- **40 application tables, all with RLS**, and zero custom application PostgreSQL routines or triggers.
+- Zero application-table SELECT grants for `anon`, `authenticated` or `service_role`.
+- The backend cannot rewrite posted transaction amounts, delete transactions, or select Health/Finance file records.
+- The backend can update only the required occurrence `rule_version` metadata while `rule_id` stays unwritable.
+- Existing workspace, person, receipt and audit row digests are identical before and after deployment. Counts remain one workspace, one person and one receipt; books, accounts and transactions remain zero. No salary, financial record or workbook import was created by this rollout.
+
+Public health and protected-resource metadata return `200`; unsigned session and MCP requests return `401` with no-store caching and the correct OAuth challenge. The existing ChatGPT plugin was refreshed in place and now shows **20 tools: 15 write-capable and five read-only**. No new OAuth consent or scope was requested. A fresh connected agent received the full manifest and successfully called native `get_session` and `get_finance_context` using the actual user's active OAuth session. Onboarding remained complete; Finance context returned the verified self, stored `America/Mexico_City` zone, zero books/accounts and permission to create a book. These reads establish hosted Finance authorization without inventing a financial setup or recording an income.
+
+The security adviser returned no ERROR findings, the expected 40 `rls_enabled_no_policy` INFO findings reflecting deliberate direct-client denial, and one WARN for disabled leaked-password protection. This rollout did not change Auth password settings. Review the [password security remediation](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection) separately; connected MCP access continues to require verified Google identity and live OAuth consent.
+
+Clients can retain tool metadata for an existing conversation. Refresh the connection and start a new conversation when a client still presents the old tool list. The refreshed native plugin and fresh-agent Finance read above passed; there is no claim that this deployment imported the workbook, saved the user's salary, or validated real financial mutations. The prior 112 unit tests, 533 local native assertions and 106 disposable integration steps remain dated local evidence, not production writes.
 
 ## Sources
 

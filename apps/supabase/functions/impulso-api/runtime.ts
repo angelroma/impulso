@@ -6,6 +6,39 @@ import type { VerifiedIdentity } from "../_shared/auth.ts";
 import { onboard, type OnboardingInput } from "../_shared/onboarding.ts";
 import type { Database } from "../_shared/database.ts";
 import type { McpConfiguration, OnboardingStatus } from "./mcp.ts";
+import type { McpDependencies } from "./mcp.ts";
+import { createAccount, createBook, getFinanceContext, recordExpense } from "../_shared/finance.ts";
+import { runLedgerTool } from "../_shared/ledger.ts";
+import { LEDGER_TOOL_SCHEMAS, type LedgerToolName } from "../_shared/ledger_contracts.ts";
+import { runDomainTool } from "../_shared/planning.ts";
+import { DOMAIN_TOOL_SCHEMAS, type DomainToolName } from "../_shared/planning_contracts.ts";
+import { runImportTool } from "../_shared/finance_imports.ts";
+import type { ImportToolName } from "../_shared/import_contracts.ts";
+import { getFinanceReport } from "../_shared/reports.ts";
+
+export function createRuntimeFinance(): Pick<
+  McpDependencies,
+  "getFinanceContext" | "createBook" | "createAccount" | "recordExpense" | "runExtendedFinance"
+> {
+  let database: Database | undefined;
+  const connection = () => database ??= createDatabase(requiredEnvironment("IMPULSO_DATABASE_URL"));
+  return {
+    getFinanceContext: (identity, input) => getFinanceContext(connection(), identity, input),
+    createBook: (identity, input) => createBook(connection(), identity, input),
+    createAccount: (identity, input) => createAccount(connection(), identity, input),
+    recordExpense: (identity, input) => recordExpense(connection(), identity, input),
+    runExtendedFinance: (identity, name, input) => {
+      if (name in LEDGER_TOOL_SCHEMAS) {
+        return runLedgerTool(connection(), identity, name as LedgerToolName, input);
+      }
+      if (name in DOMAIN_TOOL_SCHEMAS) {
+        return runDomainTool(connection(), identity, name as DomainToolName, input);
+      }
+      if (name === "get_finance_report") return getFinanceReport(connection(), identity, input);
+      return runImportTool(connection(), identity, name as ImportToolName, input);
+    },
+  };
+}
 
 function requiredEnvironment(name: string): string {
   const value = Deno.env.get(name);

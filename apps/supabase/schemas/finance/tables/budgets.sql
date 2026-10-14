@@ -16,12 +16,15 @@ CREATE TABLE finance.budgets (
     currency text NOT NULL,
     name text NOT NULL,
     person_id uuid,
+    category_id uuid,
+    category_kind text NOT NULL DEFAULT 'expense' CHECK (category_kind = 'expense'),
     starts_on date NOT NULL,
     ends_on date NOT NULL,
     amount numeric(20,4) NOT NULL CHECK (amount > 0 AND amount < 'Infinity'::numeric),
     FOREIGN KEY (workspace_id, book_id, currency) REFERENCES finance.books(workspace_id, id, currency) ON DELETE RESTRICT,
     FOREIGN KEY (workspace_id, person_id) REFERENCES core.people(workspace_id, id) ON DELETE RESTRICT,
-    UNIQUE NULLS NOT DISTINCT (workspace_id, book_id, person_id, starts_on, ends_on),
+    FOREIGN KEY (workspace_id, book_id, category_id, currency, category_kind) REFERENCES finance.categories(workspace_id, book_id, id, currency, kind) ON DELETE RESTRICT,
+    UNIQUE NULLS NOT DISTINCT (workspace_id, book_id, person_id, category_id, starts_on, ends_on),
     CHECK (ends_on > starts_on),
     CHECK (char_length(btrim(name)) > 0 AND char_length(name) <= 200)
 );
@@ -39,6 +42,8 @@ CREATE INDEX budgets_person_fk_idx ON finance.budgets (workspace_id, person_id);
 CREATE INDEX budgets_book_created_at_idx ON finance.budgets (workspace_id, book_id, created_at, id);
 
 CREATE INDEX budgets_interval_idx ON finance.budgets (workspace_id, book_id, starts_on, ends_on);
+
+CREATE INDEX budgets_category_fk_idx ON finance.budgets (workspace_id, book_id, category_id, currency, category_kind);
 
 ALTER TABLE finance.budgets ENABLE ROW LEVEL SECURITY;
 

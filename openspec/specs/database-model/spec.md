@@ -45,13 +45,20 @@ All 23 application tables SHALL enable RLS and deny ordinary table access to `PU
 
 ### Requirement: The backend receives only current service privileges
 
-The server-only `impulso_backend` role SHALL have only the declared onboarding, audit, receipt, purge-state, and Auth-view privileges. It SHALL have no Finance or Health schema access, application deletion privileges, or administration rights. Its RLS bypass SHALL remain restricted to these grants. Login credentials SHALL be provisioned separately from the declarative role definition for each environment.
+The server-only `impulso_backend` role SHALL have only declared onboarding, Finance context/creation, audit, receipt, purge-state, and Auth-view privileges. Finance grants SHALL cover only required access to books, book ACLs, accounts, and transactions, with narrow lock-column UPDATE grants. Health, budgets, files, transaction edits, deletion, and administration SHALL remain denied. Its RLS bypass SHALL remain bounded by grants, with login credentials provisioned separately.
 
 #### Scenario: The onboarding backend attempts unrelated access
 
-- **WHEN** the backend attempts to access Finance, Health, unrelated managed Auth columns, or destructive application operations
+- **WHEN** the backend attempts to access Health, Finance budgets/files, unrelated managed Auth columns, transaction edits, or destructive application operations
 - **THEN** the declared privileges deny that access
 - **AND** its allowed Core writes remain limited to the six onboarding tables and explicitly granted columns
+
+#### Scenario: A Finance service uses the new grants
+
+- **WHEN** the backend performs an authorized Finance context read or book/account/expense creation
+- **THEN** the necessary Finance reads, inserts, and native row locks are permitted
+- **AND** ordinary client roles retain no direct access to application tables or private Auth views
+- **AND** no custom SQL function, procedure, or application trigger is introduced
 
 ### Requirement: Private Auth views expose only authorization state
 
@@ -76,7 +83,7 @@ Native foreign keys SHALL enforce declared workspace relationships. Finance acco
 
 - **WHEN** a basic-person ACL or verified identity link exists
 - **THEN** that row does not create a financial-book or health-person ACL
-- **AND** future domain operations still require their own authorization implementation
+- **AND** Finance services check their independent current book grants while unimplemented domains still require their own authorization services
 
 ### Requirement: Native monetary constraints enforce representable valid rows
 
@@ -91,7 +98,7 @@ Monetary columns SHALL use `numeric(20,4)` and reject nonfinite values. Transact
 
 - **WHEN** an administrator supplies a representable four-place value to a book declaring two minor-unit places
 - **THEN** the SQL type alone does not enforce that book-specific precision
-- **AND** a future financial service must validate decimal input and currency-specific precision before writing
+- **AND** TypeScript Finance creation services validate raw decimal input and currency-specific precision before writing, without implying that administrator SQL has those application checks
 
 ### Requirement: Uniqueness preserves identity and owner limits
 
@@ -126,13 +133,19 @@ Native checks SHALL enforce declared date ordering, mutually exclusive date-or-i
 
 ### Requirement: Lifecycle columns do not imply automatic application behavior
 
-Version, timestamp, actor, archive, receipt, and workflow-state columns SHALL retain their declared types, defaults, and checks. The model MUST NOT claim automatic version increments, immutable financial history, opening-balance locking, active-parent checks, owner-existence checks, or purge execution. Those lifecycle services remain unimplemented except for the current transactional onboarding service.
+Version, timestamp, actor, archive, receipt, and workflow-state columns SHALL retain their declared types, defaults, and checks. The database MUST NOT imply automatic version increments, financial immutability, opening-balance locking, active-parent or owner-existence checks, or purge execution. Onboarding and Finance creation services SHALL enforce their implemented checks in TypeScript transactions; other lifecycle operations remain unavailable.
 
 #### Scenario: An administrator performs a direct update
 
 - **WHEN** an administrator updates a row without explicitly updating its version or metadata
 - **THEN** no custom trigger increments the version or rewrites the actor and timestamp
 - **AND** existing native constraints still apply
+
+#### Scenario: Creation services enforce their own boundaries
+
+- **WHEN** an onboarding or Finance creation service commits an authorized action
+- **THEN** its TypeScript transaction supplies required actors, initial metadata, applicable parent/owner checks, audit, and receipt
+- **AND** these checks do not expose account edits, transaction corrections, owner transfer, or purge execution
 
 ## Implementation evidence
 

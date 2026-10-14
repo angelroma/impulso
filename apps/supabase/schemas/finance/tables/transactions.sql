@@ -24,6 +24,8 @@ CREATE TABLE finance.transactions (
     voided_by_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     void_reason text,
     UNIQUE (workspace_id, book_id, id),
+    UNIQUE (workspace_id, book_id, id, currency),
+    UNIQUE (workspace_id, book_id, id, currency, kind),
     UNIQUE (workspace_id, book_id, request_id),
     FOREIGN KEY (workspace_id, book_id, currency) REFERENCES finance.books(workspace_id, id, currency) ON DELETE RESTRICT,
     FOREIGN KEY (workspace_id, book_id, source_account_id, currency) REFERENCES finance.accounts(workspace_id, book_id, id, currency) ON DELETE RESTRICT,
