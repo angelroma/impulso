@@ -2,13 +2,15 @@
 
 Impulso's remote project is `txoorpmblpvqveeudafv`. Its API origin is `https://txoorpmblpvqveeudafv.supabase.co` and its Auth issuer is `https://txoorpmblpvqveeudafv.supabase.co/auth/v1`.
 
-The public authorization page is published at `https://impulso-authorization.marmstud6.chatgpt.site` using the existing ChatGPT Site `appgprj_6acebb194398819192eeb6ec946a8c7b`. Its durable identity is in [authorization-site.json](authorization-site.json); reuse this ID when recovering the ignored Site checkout.
+The public authorization page is published at `https://impulso-authorization.marmstud6.chatgpt.site` using the existing ChatGPT Site `appgprj_6acebb194398819192eeb6ec946a8c7b`. Its durable identity is in [authorization-site.json](../reference/authorization-site.json); reuse this ID when recovering the ignored Site checkout. This guide records deployment procedures and evidence; current product requirements live in [MCP authentication](../specs/mcp-authentication/spec.md), [database model](../specs/database-model/spec.md) and [conversational onboarding](../specs/conversational-onboarding/spec.md).
 
 ## Verified status on October 13, 2026
 
-The remote database has been created and checked: 23 application tables across six schemas, RLS on all 23 tables, four private Auth views, and no custom application PostgreSQL functions or triggers. Four reviewed migration versions have been reconciled with the deployed schema. The native CLI lists all four versions and its database push dry run reports that the remote database is up to date.
+These are recorded observations from the implementation and connection work, not a live health check performed by this documentation migration. Reverify the relevant stage after future changes.
 
-Function unit tests, type checks and lint pass. The latest local integration rerun passed all three suites covering 30 steps; the browser authorization/build suite passed 17 tests and the database suite passed 256 pgTAP assertions. The static authorization page builds from the existing browser code without an additional frontend framework.
+The remote database was created and checked: 23 application tables across six schemas, RLS on all 23 tables, four private Auth views, and no custom application PostgreSQL functions or triggers. Four reviewed migration versions were reconciled with the deployed schema. The native CLI listed all four versions and its database push dry run reported that the remote database was up to date.
+
+The guided onboarding change passed all 43 function unit tests, type checks and lint through the Nx targets. Its local integration rerun passed all three suites covering 30 steps. Earlier browser authorization/build checks passed 17 tests and the database suite passed 256 pgTAP assertions; those suites were not rerun for this metadata-only change. The static authorization page builds from the existing browser code without an additional frontend framework.
 
 The remote Auth JWKS endpoint responds successfully with an ES256 signing key, and its public OpenID configuration reports the expected remote issuer. This confirms the required asymmetric signing capability.
 
@@ -18,15 +20,15 @@ The verified Site source commit is `d9d2e02bcba6ebd19731c857e363ef05728408a5`, s
 
 Personal-account CLI identity and access to the Impulso project are verified. The remote configuration push enabled Google, the OAuth server and dynamic client registration, set the hosted site and exact callback, and restricted Data API exposure to `api`. Undeclared MFA and email settings were preserved.
 
-The remote security adviser reports no WARN or ERROR findings. Its one INFO finding, `rls_enabled_no_policy`, reflects the intentional denial of direct client access to application tables.
+The remote security adviser reported no WARN or ERROR findings. Its one INFO finding, `rls_enabled_no_policy`, reflected the intentional denial of direct client access to application tables.
 
-The `impulso-api` Edge Function is deployed and active at version 1. Its health and MCP metadata endpoints returned `200`, unsigned session and MCP requests returned `401`, and the browser CORS preflight returned `204`.
+The `impulso-api` Edge Function is deployed and active at version 2, with bundle SHA-256 `8acc712544a04415f92a5ea420b02feef59b33a209085d3a616db3694d6e43f2`. The retrieved remote `mcp.ts` matches the reviewed local source after line-ending normalization. The initial deployment's health and MCP metadata checks returned `200`, unsigned session and MCP requests returned `401`, and the browser CORS preflight returned `204`.
 
 Google sign-in, the backend `/session` check of the active Google session and hosted database, consent approval and the OAuth return completed successfully. ChatGPT plugin `plugin_asdk_app_6acec007862c81918453ab99b17d90a0` is connected: its native page shows `Try in chat` and no longer shows `Continue connecting app`.
 
 Server logs on October 13 confirm `/session` returned `200` at 23:48:32 and 23:48:49 UTC. Post-consent MCP POSTs returned `200` at 23:48:56, 23:48:58 and 23:49:01 UTC, and `202` at 23:48:59 UTC. The handler requires an OAuth client, the `openid` scope and a Google identity before accepting MCP requests, so these responses verify authenticated MCP handshake/discovery.
 
-No ChatGPT `get_session` MCP invocation has been verified. The private plugin's callable tools were absent from both the current and fresh agent tool metadata. Remote denial and revocation tests also remain pending.
+After ChatGPT's native Refresh tools action, fresh agent tool metadata contained the guided Orbit/Momentum/Launchpad choices, city-based time-zone correction and complete-review instructions. Real authenticated `get_session` invocations through the connected Impulso plugin succeeded and reported onboarding as `required`. That deployment-verification stage stopped before account creation. A fresh connected Codex agent also completed a synthetic walkthrough covering name choice, custom names, missing/ambiguous context, a Madrid correction, a revised review and cancellation. A later real conversation completed the accepted setup, reported workspace creation and confirmed a complete setup state. These observations do not guarantee every MCP client's behavior. See the separate evidence scope in [local development](local-development.md#verification-status). Remote denial and revocation tests remain pending.
 
 ## Use the Personal CLI profile
 
@@ -44,7 +46,7 @@ The Personal identity and access to `txoorpmblpvqveeudafv` have been verified. C
 
 ## Prepare the public remote configuration
 
-The existing HTTPS authorization Site is published using the Worker ESM static-response wrapper described in [the hosting guide](../apps/supabase/auth-hosting.md). The isolated checkout is `work/impulso-auth-site`; its manifest preserves the Site ID and omits `static`. `worker/index.js` embeds the generated public browser assets, and its dependency-free build produces `dist/server/index.js` and the hosting manifest. All authentication, consent and application business logic stay in Supabase; the Sites wrapper serves public responses only. It introduces no SQL routines or database behavior. Do not create a replacement Site if the ignored checkout is missing. The configured origin has no path, query, fragment or trailing slash:
+The existing HTTPS authorization Site is published using the Worker ESM static-response wrapper described in [authorization hosting](authorization-hosting.md). The isolated checkout is `work/impulso-auth-site`; its manifest preserves the Site ID and omits `static`. `worker/index.js` embeds the generated public browser assets, and its dependency-free build produces `dist/server/index.js` and the hosting manifest. All authentication, consent and application business logic stay in Supabase; the Sites wrapper serves public responses only. It introduces no SQL routines or database behavior. Do not create a replacement Site if the ignored checkout is missing. The configured origin has no path, query, fragment or trailing slash:
 
 ```powershell
 $env:IMPULSO_AUTH_SITE_URL = 'https://impulso-authorization.marmstud6.chatgpt.site'
@@ -91,7 +93,7 @@ Its configured gateway JWT check is disabled because the TypeScript handler vali
 
 The published page's HTTP routes and security headers have passed verification. Repeat those delivery checks after publication changes. Windows source packaging requires Git for Windows' `bin` directory on the helper process PATH and `TAR_OPTIONS=--force-local`; see the hosting guide for the exact process settings.
 
-The browser OAuth connection, authenticated hosted `/session` check and authenticated MCP handshake/discovery have passed. When the private plugin's tools become available to the verifying client, invoke `get_session` through ChatGPT and record its result separately. Test denial on a separate request and confirm a revoked session is rejected; these remote checks remain pending.
+The browser OAuth connection, authenticated hosted `/session` check, authenticated MCP handshake/discovery and actual plugin `get_session` call passed during the recorded verification. A later accepted conversational onboarding also completed. After future metadata deployments, refresh client tool discovery and verify a fresh client receives the [canonical conversational guidance](../specs/conversational-onboarding/spec.md). Test denial on a separate request and confirm a revoked session is rejected; these remote checks remain pending. Finance, Health, sharing, files and purge services remain unimplemented even though their database tables exist.
 
 ## Sources
 

@@ -1,6 +1,6 @@
 # OpenAI tunnel for local Impulso
 
-The OpenAI Secure MCP Tunnel connects the hosted client to Impulso's local MCP endpoint. Supabase, PostgreSQL and both Edge Functions remain on this computer. The registered tunnel belongs to the Personal OpenAI organization and is linked to its ChatGPT workspace.
+This is an optional local-development alternative. The active [remote deployment](remote-deployment.md) uses a public HTTPS MCP endpoint and does not need this tunnel. The OpenAI Secure MCP Tunnel is intended to connect a hosted client to Impulso's local MCP endpoint while Supabase, PostgreSQL and both Edge Functions remain on this computer. The tunnel registration and launcher were prepared, but the runtime connection was never verified. The registered tunnel belongs to the Personal OpenAI organization and is linked to its ChatGPT workspace.
 
 | Setting                 | Value                                                 |
 | ----------------------- | ----------------------------------------------------- |
@@ -52,10 +52,10 @@ The currently implemented tools are `get_session` for identity and setup status,
 
 The tunnel client discovers Impulso's protected resource metadata and Supabase OAuth metadata. It registers the private registration and token endpoints as narrow Harpoon targets. OpenAI's OAuth shim relays dynamic registration and token exchange through those targets to local Supabase Auth. The profile does not expose the entire Supabase gateway, database or Studio, and there is no general-purpose HTTP proxy target.
 
-The browser authorization endpoint remains a direct `127.0.0.1` URL. Complete Google sign-in and Impulso consent in a browser on **this computer**, where the local Supabase stack is reachable. Signing in from a different device will not reach this computer's loopback address. The local launcher allows plaintext Harpoon HTTP because these development endpoints are on loopback; it rejects plaintext URLs with other hosts in the profile. A future hosted deployment requires HTTPS and separate deployment configuration.
+The browser authorization endpoint remains a direct `127.0.0.1` URL. Complete Google sign-in and Impulso consent in a browser on **this computer**, where the local Supabase stack is reachable. Signing in from a different device will not reach this computer's loopback address. The local launcher allows plaintext Harpoon HTTP because these development endpoints are on loopback; it rejects plaintext URLs with other hosts in the profile. The separate hosted deployment uses HTTPS and its own runtime configuration; this local tunnel profile is not its deployment configuration.
 
 See the pinned official [OAuth tunnel onboarding](https://github.com/openai/tunnel-client/blob/v0.0.16/docs/onboarding.md#oauth-protected-mcp-supported) and [OAuth connector behavior](https://github.com/openai/tunnel-client/blob/v0.0.16/docs/connectors.md#oauth-protected-connector-behavior).
 
 ## Verification status
 
-The tunnel registration and local profile exist. The launcher and Nx targets have been prepared and inspected without starting the client. Runtime readiness, hosted connector registration, OAuth approval and an authenticated `get_session` call still require verification with the restricted runtime key. Existing local MCP and OAuth checks are documented in [edge-functions.md](edge-functions.md).
+The recorded setup created the tunnel registration and local profile and inspected the launcher and Nx targets without starting the client. Runtime readiness, connector registration through this tunnel, tunnel-based OAuth approval and a tunnel-based authenticated `get_session` call remain unverified. The later successful remote connection does not verify the tunnel. Existing local MCP and OAuth checks are documented in [local development](local-development.md). The [conversational-onboarding specification](../specs/conversational-onboarding/spec.md) applies when a client can connect successfully.

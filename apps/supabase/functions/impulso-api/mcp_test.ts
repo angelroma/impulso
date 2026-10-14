@@ -115,18 +115,119 @@ Deno.test("MCP initializes with the SDK and advertises only conversational setup
   assert.equal(response.headers.get("mcp-session-id"), null);
   const initialized = await response.json();
   assert.equal(initialized.result.serverInfo.name, "Impulso");
-  assert.match(initialized.result.instructions, /ask the user to confirm/);
+  const instructions = initialized.result.instructions;
+  assert.match(instructions, /Use get_session before the first Impulso action/);
+  assert.match(instructions, /If complete, skip initial setup; if unavailable/);
+  assert.match(instructions, /workspace organizes the user's data/);
+  assert.match(instructions, /1\. Orbit \(recommended\), 2\. Momentum, 3\. Launchpad/);
+  assert.match(instructions, /Ask for a display name only when missing/);
+  assert.match(instructions, /Preserve user-provided names and their language/);
+  assert.match(instructions, /Call onboard only after acceptance of the complete review/);
+  assert.match(instructions, /Only account setup is currently available/);
+  assert.doesNotMatch(instructions, /this local version/);
   assert.equal((await handle(rpc("notifications/initialized", undefined, null))).status, 202);
   const listed = await (await handle(rpc("tools/list"))).json();
   assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), [
     "get_session",
     "onboard",
   ]);
-  const onboard = listed.result.tools[1];
+  const [session, onboard] = listed.result.tools;
+  assert.deepEqual(session.inputSchema.properties, {});
+  assert.equal(session.inputSchema.additionalProperties, false);
+  assert.match(session.description, /before the first Impulso action/);
+  assert.match(session.description, /preserve supplied names and their language/);
+  assert.match(
+    session.description,
+    /Ask for a display name only when missing; never derive it from email/,
+  );
+  assert.match(session.description, /If the workspace name is missing, offer Orbit/);
+  assert.match(
+    session.description,
+    /This response contains no display name, time-zone hint, or location/,
+  );
+  assert.deepEqual(onboard.inputSchema.required, [
+    "request_id",
+    "display_name",
+    "workspace_name",
+    "timezone",
+  ]);
+  assert.deepEqual(Object.keys(onboard.inputSchema.properties), onboard.inputSchema.required);
   assert.equal(onboard.inputSchema.additionalProperties, false);
+  assert.match(onboard.description, /accept a complete review/);
+  assert.match(onboard.description, /Resolve city corrections internally to a canonical IANA zone/);
+  assert.match(onboard.description, /cancellation performs no write/);
+  assert.match(onboard.inputSchema.properties.timezone.description, /Resolve it for the user/);
   assert.equal(onboard.annotations.readOnlyHint, false);
   assert.equal(onboard.annotations.idempotentHint, true);
   assert.equal((await handle(new Request(resourceUrl))).status, 405);
+});
+
+Deno.test("MCP advertises contextual time suggestions and a single complete setup review", async () => {
+  const response = await handler()(rpc("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "Guided setup test", version: "1.0.0" },
+  }));
+  const { instructions } = (await response.json()).result;
+  assert.match(instructions, /user's explicit preference.*city and country first/);
+  assert.match(instructions, /hint actually available in the current client context/);
+  assert.match(instructions, /backend does not know the user's location/);
+  assert.match(instructions, /Never infer it from email, language, IP address/);
+  assert.match(instructions, /never silently default to UTC/);
+  assert.match(instructions, /city or regional label/);
+  assert.match(instructions, /do not require the user to type an IANA identifier/);
+  assert.match(instructions, /If context is missing, ask for a city/);
+  assert.match(instructions, /Clarify ambiguous cities, multi-zone countries, fixed offsets/);
+  assert.match(instructions, /correction overrides a hint/);
+  assert.match(
+    instructions,
+    /review containing the display name, workspace name, and city-based time zone/,
+  );
+  assert.match(instructions, /ask the user to confirm whether to continue or change/);
+  assert.match(
+    instructions,
+    /Show a revised review after a correction\. Cancellation performs no write/,
+  );
+  assert.match(instructions, /Preserve that UUID and the unchanged payload for an identical retry/);
+  assert.match(instructions, /changed submission needs a fresh UUID/);
+});
+
+Deno.test("MCP get_session reports setup state without creating resources or inventing hints", async () => {
+  for (
+    const status of [
+      { status: "required" as const },
+      { status: "complete" as const, workspace_id: "workspace", person_id: "person" },
+      { status: "unavailable" as const },
+    ]
+  ) {
+    let writes = 0;
+    const handle = handler({
+      onboardingStatus: () => Promise.resolve(status),
+      onboard: () => {
+        writes++;
+        throw new Error("A session check must not create resources.");
+      },
+    });
+    const { result } = await (await handle(rpc("tools/call", {
+      name: "get_session",
+      arguments: {},
+    }))).json();
+    assert.deepEqual(result.structuredContent, {
+      user: { id: identity.user_id, email: identity.email },
+      onboarding: status,
+    });
+    assert.equal(writes, 0);
+    const invalid = await (await handle(rpc("tools/call", {
+      name: "get_session",
+      arguments: { timezone: "America/Mexico_City" },
+    }))).json();
+    assert.equal(invalid.result.isError, true);
+  }
+  const fallback = await (await handler({ onboardingStatus: undefined })(rpc("tools/call", {
+    name: "get_session",
+    arguments: {},
+  }))).json();
+  assert.deepEqual(fallback.result.structuredContent.onboarding, { status: "unavailable" });
 });
 
 Deno.test("MCP get_session honors email scope and does not expose tokens or internal session IDs", async () => {
@@ -161,6 +262,9 @@ Deno.test("MCP onboarding preserves the verified actor and rejects invented iden
     const argumentsValue of [
       { ...input, actor_user_id: "other" },
       { ...input, timezone: "Invalid/Zone" },
+      { ...input, timezone: "Madrid, Spain" },
+      { ...input, timezone: "Mexico City time" },
+      { ...input, timezone: "-06:00" },
       { ...input, display_name: " " },
     ]
   ) {
@@ -178,6 +282,38 @@ Deno.test("MCP onboarding preserves the verified actor and rejects invented iden
     person_id: "person",
     status: "created",
   });
+});
+
+Deno.test("MCP onboarding passes accepted names and canonical city zones through the strict contract", async () => {
+  const acceptedInputs = [
+    { ...input, workspace_name: "Orbit", timezone: "America/Mexico_City" },
+    { ...input, display_name: "Ángel", workspace_name: "Mi Universo", timezone: "Europe/Madrid" },
+  ];
+  for (const accepted of acceptedInputs) {
+    let calls = 0;
+    const handle = handler({
+      onboard: (actor, requestInput) => {
+        calls++;
+        assert.equal(actor, identity);
+        assert.deepEqual(requestInput, accepted);
+        return Promise.resolve({
+          workspace_id: "workspace",
+          person_id: "person",
+          status: "created",
+        });
+      },
+    });
+    const response = await handle(rpc("tools/call", { name: "onboard", arguments: accepted }));
+    const { result } = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(result.structuredContent, {
+      workspace_id: "workspace",
+      person_id: "person",
+      status: "created",
+    });
+    assert.equal(calls, 1);
+  }
 });
 
 Deno.test("MCP isolates simultaneous callers and returns controlled application errors", async () => {
