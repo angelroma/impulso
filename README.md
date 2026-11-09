@@ -1,14 +1,44 @@
 # Impulso
 
-Impulso connects AI clients to a modular Supabase backend for personal workspaces, finance, and health. Local source and the hosted version 3 API provide Google sign-in, OAuth, conversational onboarding, financial setup, an exact ledger, budgets and commitments, debt and wealth tracking, reports, and reviewed historical imports through 20 MCP tools. The remote database has ten reviewed migrations and 40 application tables; [rollout verification](openspec/guides/remote-deployment.md#finance-rollout-verification) records refreshed plugin discovery and the authenticated session check. No salary, financial records or live workbook imports were created during deployment. Health operations remain pending.
+Impulso is a personal finance backend that AI clients use through MCP. It runs on Supabase:
+Google sign-in and OAuth for the connector, and TypeScript Edge Functions for all business logic.
 
-Start with the [documentation index](openspec/README.md). All project technical documentation lives in `openspec`:
+## Model
 
-- [Current specifications](openspec/README.md#current-specifications)
-- [Operating guides](openspec/README.md#operating-guides)
-- [Database catalogue and original references](openspec/reference/README.md)
-- [Active changes and archived history](openspec/changes)
+Six tables in the `finance` schema, created by one baseline migration:
 
-The canonical database definitions and migration history remain in [apps/supabase](apps/supabase). Business logic and MCP tools use TypeScript Supabase Edge Functions. The current database model has no custom SQL functions, procedures, or application triggers. Implementation artifacts use English; user-provided content keeps its original language.
+- `workspaces`: independent books (for example "Yo" and "Mamá"); one is the default.
+- `accounts`: can be renamed and moved between workspaces together with their transactions.
+- `categories`, `payees`, `projects`: per workspace. Payees can carry a default category;
+  projects track budget, spent and remaining.
+- `transactions`: one row per income, expense or transfer. Rows are editable, and removal is a
+  restorable soft delete.
 
-For development, follow the [local development guide](openspec/guides/local-development.md) and [database workflow](openspec/guides/database-workflow.md). For the hosted connection, use the [remote deployment guide](openspec/guides/remote-deployment.md). Repository instructions are in [AGENTS.md](AGENTS.md).
+The database has no custom SQL functions, procedures or application triggers. The canonical
+schema is [apps/supabase/schemas](apps/supabase/schemas), and the migration history is
+[apps/supabase/migrations](apps/supabase/migrations).
+
+## MCP tools
+
+`get_context`, `manage_workspace`, `manage_account`, `manage_category`, `manage_payee`,
+`manage_project`, `record_transaction`, `update_transaction`, `list_transactions` and
+`get_summary`.
+
+## Development
+
+Run tasks through Nx:
+
+```bash
+npx nx run supabase:start
+npx nx run supabase:serve
+npx nx run supabase:test
+npx nx run supabase:test-db
+npx nx run supabase:test-integration
+npx nx run supabase:verify-schema
+```
+
+Feature work follows Spec Kit. Principles are in the
+[constitution](.specify/memory/constitution.md), and feature specs, plans and tasks live in
+`specs/<feature>/`. Repository instructions are in [AGENTS.md](AGENTS.md).
+
+Implementation artifacts use English; user-provided content keeps its original language.

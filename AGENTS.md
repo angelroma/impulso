@@ -38,6 +38,6 @@ Use the complete declarative tree in `apps/supabase/schemas` as the desired sche
 
 ## Documentation ownership
 
-Keep project technical documentation in `openspec`, using `openspec/README.md` as the index. Use native `specs` for current capability requirements and `changes` for proposed work and archived history. Use the project-specific `guides` directory for operating procedures and `reference` for supporting sources and original design material. Do not recreate a root `docs` directory. Keep the root README as a short entry point and AGENTS.md as repository instructions.
+Feature work follows Spec Kit. The project constitution is `.specify/memory/constitution.md`; it supersedes other practices where they conflict, and every plan checks against it. Each feature's spec, plan and tasks live in `specs/<feature>/`, created by the `speckit-*` skills. Do not recreate a root `docs` or `openspec` directory. Keep the root README as a short entry point and AGENTS.md as repository instructions.
 
-Distinguish implemented behavior from planned operations and dated verification observations. Preserve original user-provided documents and archived change records; explain their provenance and superseded paths in current indexes instead of rewriting historical evidence. Keep live document links current when relocating files. SQL and runtime source remain canonical implementation evidence; documentation does not replace the declarative tree or migration history.
+Distinguish implemented behavior from planned work. Keep live document links current when relocating files. SQL and runtime source remain canonical implementation evidence; documentation does not replace the declarative tree in `apps/supabase/schemas` or the migration history in `apps/supabase/migrations`.
