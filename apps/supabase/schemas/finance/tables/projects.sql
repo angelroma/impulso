@@ -1,9 +1,9 @@
--- Declarative definition: apps/supabase/schemas/app/tables/projects.sql.
+-- Declarative definition: apps/supabase/schemas/finance/tables/projects.sql.
 -- Cross-category buckets such as "Viaje Japón"; spent and remaining are computed from transactions.
 
-CREATE TABLE app.projects (
+CREATE TABLE finance.projects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
     budget numeric(14,2) CHECK (budget IS NULL OR budget > 0),
@@ -16,8 +16,8 @@ CREATE TABLE app.projects (
     CHECK (start_date IS NULL OR end_date IS NULL OR end_date >= start_date)
 );
 
-CREATE UNIQUE INDEX projects_name_idx ON app.projects (workspace_id, lower(name));
+CREATE UNIQUE INDEX projects_name_idx ON finance.projects (workspace_id, lower(name));
 
-ALTER TABLE app.projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.projects ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.projects FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.projects FROM PUBLIC, anon, authenticated, service_role;

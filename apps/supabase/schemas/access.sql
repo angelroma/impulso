@@ -1,29 +1,29 @@
 -- Client access remains closed; Edge Functions authorize every application operation.
 
-REVOKE ALL ON SCHEMA app, api, private FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON SCHEMA finance, api, private FROM PUBLIC, anon, authenticated, service_role;
 
 GRANT USAGE ON SCHEMA api TO anon, authenticated, service_role;
 
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA app, api, private FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA finance, api, private FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES IN SCHEMA app, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA finance, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA finance, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES IN SCHEMA app, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA finance, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA finance, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
 
-GRANT USAGE ON SCHEMA app, private TO impulso_backend;
+GRANT USAGE ON SCHEMA finance, private TO impulso_backend;
 
 -- Records are editable; removal is a soft delete or archive, so the backend never receives DELETE.
 GRANT SELECT, INSERT, UPDATE ON TABLE
-    app.workspaces,
-    app.accounts,
-    app.categories,
-    app.payees,
-    app.projects,
-    app.transactions
+    finance.workspaces,
+    finance.accounts,
+    finance.categories,
+    finance.payees,
+    finance.projects,
+    finance.transactions
 TO impulso_backend;
 
 -- Owner-checked projections expose only Auth identifiers and grant state; locks reach base rows.

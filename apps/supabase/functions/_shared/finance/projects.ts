@@ -18,7 +18,7 @@ const createProject: Action<ManageProjectInput> = async (sql, userId, input) => 
   const workspace = await resolveWorkspace(sql, userId, input.workspace_id);
   if (!input.name) throw required("name", "create a project");
   const [project] = await sql<{ id: string }[]>`
-    INSERT INTO app.projects (workspace_id, name, budget, start_date, end_date, notes)
+    INSERT INTO finance.projects (workspace_id, name, budget, start_date, end_date, notes)
     VALUES (${workspace.id}, ${input.name}, ${input.budget ?? null}, ${input.start_date ?? null},
       ${input.end_date ?? null}, ${input.notes ?? null})
     RETURNING id`;
@@ -34,7 +34,9 @@ const updateProject: Action<ManageProjectInput> = async (sql, userId, input) => 
     end_date: input.end_date,
     notes: input.notes,
   });
-  await sql`UPDATE app.projects SET ${sql(changes)}, updated_at = now() WHERE id = ${projectId}`;
+  await sql`UPDATE finance.projects SET ${
+    sql(changes)
+  }, updated_at = now() WHERE id = ${projectId}`;
   return { status: "updated", project: await oneProject(sql, workspace, projectId) };
 };
 
@@ -43,7 +45,7 @@ function setStatus(status: "active" | "closed", result: string): Action<ManagePr
   return async (sql, userId, input) => {
     const { workspace, projectId } = await ownedProject(sql, userId, input);
     await sql`
-      UPDATE app.projects SET status = ${status}, updated_at = now() WHERE id = ${projectId}`;
+      UPDATE finance.projects SET status = ${status}, updated_at = now() WHERE id = ${projectId}`;
     return { status: result, project: await oneProject(sql, workspace, projectId) };
   };
 }
@@ -59,8 +61,8 @@ const PROJECT_ACTIONS: Record<ManageProjectInput["action"], Action<ManageProject
 async function ownedProject(sql: Sql, userId: string, input: ManageProjectInput) {
   if (!input.project_id) throw required("project_id", `${input.action} a project`);
   const [owned] = await sql<{ workspace_id: string }[]>`
-    SELECT pr.workspace_id FROM app.projects pr
-    JOIN app.workspaces w ON w.id = pr.workspace_id AND w.owner_user_id = ${userId}
+    SELECT pr.workspace_id FROM finance.projects pr
+    JOIN finance.workspaces w ON w.id = pr.workspace_id AND w.owner_user_id = ${userId}
       AND w.archived_at IS NULL
     WHERE pr.id = ${input.project_id} FOR UPDATE OF pr`;
   if (!owned) throw notFound("The project");

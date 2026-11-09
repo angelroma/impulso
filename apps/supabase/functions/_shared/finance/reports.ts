@@ -26,12 +26,12 @@ export async function listTransactions(sql: Sql, userId: string, input: ListTran
     SELECT t.id, t.kind, t.amount::text AS amount, a.currency, t.occurred_on::text AS date,
       a.name AS account, ta.name AS to_account, p.name AS payee, c.name AS category,
       pr.name AS project, t.notes, CASE WHEN t.deleted_at IS NOT NULL THEN true END AS deleted
-    FROM app.transactions t
-    JOIN app.accounts a ON a.id = t.account_id
-    LEFT JOIN app.accounts ta ON ta.id = t.to_account_id
-    LEFT JOIN app.payees p ON p.id = t.payee_id
-    LEFT JOIN app.categories c ON c.id = t.category_id
-    LEFT JOIN app.projects pr ON pr.id = t.project_id
+    FROM finance.transactions t
+    JOIN finance.accounts a ON a.id = t.account_id
+    LEFT JOIN finance.accounts ta ON ta.id = t.to_account_id
+    LEFT JOIN finance.payees p ON p.id = t.payee_id
+    LEFT JOIN finance.categories c ON c.id = t.category_id
+    LEFT JOIN finance.projects pr ON pr.id = t.project_id
     WHERE t.workspace_id = ${workspace.id}
       ${input.include_deleted ? sql`` : sql`AND t.deleted_at IS NULL`}
       ${input.from ? sql`AND t.occurred_on >= ${input.from}` : sql``}
@@ -61,11 +61,12 @@ export async function getSummary(sql: Sql, userId: string, input: GetSummaryInpu
   const from = input.from ?? `${to.slice(0, 7)}-01`;
   if (from > to) throw fail(400, "invalid_period", "from must not be after to.");
   const base = sql`
-    FROM app.transactions t
-    JOIN app.accounts a ON a.id = t.account_id
-    LEFT JOIN app.payees p ON p.id = t.payee_id
-    LEFT JOIN app.categories c ON c.id = t.category_id
-    LEFT JOIN app.projects pr ON pr.id = t.project_id
+    FROM finance.transactions t
+    JOIN finance.accounts a ON a.id = t.account_id
+    LEFT JOIN finance.payees p ON p.id = t.payee_id
+    LEFT JOIN finance.categories c ON c.id = t.category_id
+    LEFT JOIN finance.categories pc ON pc.id = c.parent_id
+    LEFT JOIN finance.projects pr ON pr.id = t.project_id
     WHERE t.workspace_id = ${workspace.id} AND t.deleted_at IS NULL AND t.kind <> 'transfer'
       AND t.occurred_on BETWEEN ${from}::date AND ${to}::date`;
   const measures = sql`
@@ -90,10 +91,10 @@ export async function getSummary(sql: Sql, userId: string, input: GetSummaryInpu
     ? sql`1`
     : sql`SUM(t.amount) FILTER (WHERE t.kind = 'expense') DESC NULLS LAST`;
   const groups = await sql<Row[]>`
-    SELECT ${key} AS key, ${byCategory ? sql`c.group_name AS "group",` : sql``} a.currency,
+    SELECT ${key} AS key, ${byCategory ? sql`pc.name AS parent,` : sql``} a.currency,
       ${measures}
     ${base}
-    GROUP BY 1, ${byCategory ? sql`c.group_name,` : sql``} a.currency
+    GROUP BY 1, ${byCategory ? sql`pc.name,` : sql``} a.currency
     ORDER BY ${order}
     LIMIT 100`;
   return { workspace: workspace.name, from, to, totals, groups: groups.map(compact) };

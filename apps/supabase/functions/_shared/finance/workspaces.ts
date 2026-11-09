@@ -15,10 +15,11 @@ import {
   validTimezone,
   type Workspace,
 } from "./common.ts";
+import { seedDefaultCategories } from "./default_categories.ts";
 
 export async function getContext(sql: Sql, userId: string, input: GetContextInput): Promise<Row> {
   const workspaces = await sql<Workspace[]>`
-    SELECT id, name, currency, timezone, is_default FROM app.workspaces
+    SELECT id, name, currency, timezone, is_default FROM finance.workspaces
     WHERE owner_user_id = ${userId} AND archived_at IS NULL
     ORDER BY is_default DESC, lower(name)`;
   if (workspaces.length === 0) return { setup_required: true, workspaces: [] };
@@ -28,13 +29,14 @@ export async function getContext(sql: Sql, userId: string, input: GetContextInpu
   if (!selected) throw notFound("The workspace");
   const accounts = await accountBalances(sql, selected.id);
   const categories = await sql<Row[]>`
-    SELECT id, name, group_name AS "group", kind FROM app.categories
-    WHERE workspace_id = ${selected.id} AND archived_at IS NULL
-    ORDER BY kind, lower(coalesce(group_name, '')), lower(name)`;
+    SELECT c.id, c.name, p.name AS parent, c.kind FROM finance.categories c
+    LEFT JOIN finance.categories p ON p.id = c.parent_id
+    WHERE c.workspace_id = ${selected.id} AND c.archived_at IS NULL
+    ORDER BY c.kind, lower(coalesce(p.name, c.name)), p.id IS NOT NULL, lower(c.name)`;
   // Most-used payees first, so the likely choices come first in a short list.
   const payees = await sql<Row[]>`
-    SELECT p.id, p.name, p.default_category_id FROM app.payees p
-    LEFT JOIN app.transactions t ON t.payee_id = p.id AND t.deleted_at IS NULL
+    SELECT p.id, p.name, p.default_category_id FROM finance.payees p
+    LEFT JOIN finance.transactions t ON t.payee_id = p.id AND t.deleted_at IS NULL
     WHERE p.workspace_id = ${selected.id} AND p.archived_at IS NULL
     GROUP BY p.id ORDER BY count(t.id) DESC, lower(p.name) LIMIT 100`;
   const projects = await projectProgress(sql, selected.id, selected.currency, true);
@@ -61,14 +63,15 @@ const createWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input)
   if (!input.timezone) throw required("timezone", "create a workspace");
   await validTimezone(sql, input.timezone);
   const [{ count }] = await sql<{ count: number }[]>`
-    SELECT count(*)::int AS count FROM app.workspaces
+    SELECT count(*)::int AS count FROM finance.workspaces
     WHERE owner_user_id = ${userId} AND archived_at IS NULL`;
   const isDefault = count === 0 || input.is_default === true;
   if (isDefault) await clearDefaultWorkspace(sql, userId);
   const [workspace] = await sql<Workspace[]>`
-    INSERT INTO app.workspaces (owner_user_id, name, currency, timezone, is_default)
+    INSERT INTO finance.workspaces (owner_user_id, name, currency, timezone, is_default)
     VALUES (${userId}, ${input.name}, ${input.currency}, ${input.timezone}, ${isDefault})
     RETURNING id, name, currency, timezone, is_default`;
+  await seedDefaultCategories(sql, workspace.id);
   return { status: "created", workspace };
 };
 
@@ -80,7 +83,7 @@ const updateWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input)
   if (input.currency && input.currency !== workspace.currency) {
     // Project budgets are in the workspace currency; changing it would silently drop their spending.
     const [account] =
-      await sql`SELECT 1 FROM app.accounts WHERE workspace_id = ${workspace.id} LIMIT 1`;
+      await sql`SELECT 1 FROM finance.accounts WHERE workspace_id = ${workspace.id} LIMIT 1`;
     if (account) {
       throw fail(
         409,
@@ -98,7 +101,7 @@ const updateWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input)
     is_default: input.is_default === true ? true : undefined,
   });
   const [updated] = await sql<Workspace[]>`
-    UPDATE app.workspaces SET ${sql(changes)}, updated_at = now() WHERE id = ${workspace.id}
+    UPDATE finance.workspaces SET ${sql(changes)}, updated_at = now() WHERE id = ${workspace.id}
     RETURNING id, name, currency, timezone, is_default`;
   return { status: "updated", workspace: updated };
 };
@@ -107,7 +110,7 @@ const archiveWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input
   const workspace = await ownedWorkspace(sql, userId, input);
   if (workspace.is_default) {
     const [other] = await sql`
-      SELECT 1 FROM app.workspaces WHERE owner_user_id = ${userId} AND archived_at IS NULL
+      SELECT 1 FROM finance.workspaces WHERE owner_user_id = ${userId} AND archived_at IS NULL
         AND id <> ${workspace.id} LIMIT 1`;
     if (other) {
       throw fail(
@@ -118,7 +121,7 @@ const archiveWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input
     }
   }
   await sql`
-    UPDATE app.workspaces SET archived_at = now(), is_default = false, updated_at = now()
+    UPDATE finance.workspaces SET archived_at = now(), is_default = false, updated_at = now()
     WHERE id = ${workspace.id}`;
   return { status: "archived", workspace: { id: workspace.id, name: workspace.name } };
 };
@@ -137,6 +140,6 @@ function ownedWorkspace(sql: Sql, userId: string, input: ManageWorkspaceInput) {
 
 async function clearDefaultWorkspace(sql: Sql, userId: string) {
   await sql`
-    UPDATE app.workspaces SET is_default = false, updated_at = now()
+    UPDATE finance.workspaces SET is_default = false, updated_at = now()
     WHERE owner_user_id = ${userId} AND is_default`;
 }

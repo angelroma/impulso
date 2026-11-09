@@ -57,8 +57,12 @@ export const manageCategoryInput = z.object({
   workspace_id: uuid.optional(),
   category_id: uuid.optional().describe("Required for update and archive."),
   name: name.optional(),
-  kind: z.enum(["income", "expense"]).optional().describe("Required for create."),
-  group: name.nullable().optional().describe("Optional group such as Hogar; null clears it."),
+  kind: z.enum(["income", "expense"]).optional().describe(
+    "Required to create a top-level category; a subcategory takes its parent's kind.",
+  ),
+  parent_id: uuid.nullable().optional().describe(
+    "Top-level category this one belongs under, e.g. Renta under Vivienda; null makes it top-level.",
+  ),
 }).strict();
 
 export const managePayeeInput = z.object({
@@ -159,7 +163,8 @@ export const FINANCE_TOOLS = {
     input: manageWorkspaceInput,
     description:
       "Create, rename, change currency/time zone, set as default, or archive a workspace. " +
-      "Each workspace is independent. The first one becomes the default.",
+      "Each workspace is independent and starts with default categories. The first one becomes " +
+      "the default.",
   },
   manage_account: {
     title: "Manage account",
@@ -173,7 +178,9 @@ export const FINANCE_TOOLS = {
     title: "Manage category",
     readOnly: false,
     input: manageCategoryInput,
-    description: "Create, rename, regroup or archive an income or expense category.",
+    description:
+      "Create, rename, move under a parent or archive an income or expense category. Keep " +
+      "categories general (Suscripciones, Renta); who was paid is the payee, not a category.",
   },
   manage_payee: {
     title: "Manage payee",

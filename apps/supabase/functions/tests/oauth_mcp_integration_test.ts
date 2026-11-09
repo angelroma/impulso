@@ -611,8 +611,8 @@ Deno.test("Local MCP uses consented OAuth, PKCE and the Finance tools", async (t
       );
       const [counts] = await database`
         SELECT
-          (SELECT count(*)::int FROM app.workspaces WHERE owner_user_id = ${user.userId}) AS workspaces,
-          (SELECT count(*)::int FROM app.transactions WHERE request_id = ${expense.request_id}) AS transactions
+          (SELECT count(*)::int FROM finance.workspaces WHERE owner_user_id = ${user.userId}) AS workspaces,
+          (SELECT count(*)::int FROM finance.transactions WHERE request_id = ${expense.request_id}) AS transactions
       `;
       assert(
         counts.workspaces === 1 && counts.transactions === 1,
@@ -729,13 +729,13 @@ Deno.test("Local MCP uses consented OAuth, PKCE and the Finance tools", async (t
       if (users.length > 0) {
         await database.begin(async (sql) => {
           const owned = sql`
-            SELECT id FROM app.workspaces WHERE owner_user_id = ANY(${sql.array(users, 2950)})`;
-          await sql`DELETE FROM app.transactions WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.payees WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.projects WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.categories WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.accounts WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.workspaces WHERE owner_user_id = ANY(${
+            SELECT id FROM finance.workspaces WHERE owner_user_id = ANY(${sql.array(users, 2950)})`;
+          await sql`DELETE FROM finance.transactions WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.payees WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.projects WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.categories WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.accounts WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.workspaces WHERE owner_user_id = ANY(${
             sql.array(users, 2950)
           })`;
         });

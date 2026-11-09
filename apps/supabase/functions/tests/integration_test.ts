@@ -183,10 +183,10 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
       throw new Error(`${name} unexpectedly succeeded; expected ${code}.`);
     };
 
-    await test.step("The backend role edits app tables but can never delete rows", async () => {
+    await test.step("The backend role edits finance tables but can never delete rows", async () => {
       const [privileges] = await database<{ can_delete: boolean; can_update: boolean }[]>`
-        SELECT has_table_privilege('impulso_backend', 'app.transactions', 'DELETE') AS can_delete,
-          has_table_privilege('impulso_backend', 'app.transactions', 'UPDATE') AS can_update`;
+        SELECT has_table_privilege('impulso_backend', 'finance.transactions', 'DELETE') AS can_delete,
+          has_table_privilege('impulso_backend', 'finance.transactions', 'UPDATE') AS can_update`;
       assert(
         privileges.can_update && !privileges.can_delete,
         "Transactions must be editable and never hard-deleted.",
@@ -213,6 +213,15 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
         timezone: "America/Mexico_City",
       });
       assert(yo.workspace.is_default === true, "The first workspace must become the default.");
+      const seeded: Result[] = (await call("get_context", {})).categories;
+      assert(
+        seeded.some((category) => category.name === "Vivienda" && !category.parent) &&
+          seeded.some((category) => category.name === "Renta" && category.parent === "Vivienda") &&
+          seeded.some((category) =>
+            category.name === "Salario, facturas" && category.kind === "income"
+          ),
+        "A new workspace must start with the default categories.",
+      );
       const mama = await call("manage_workspace", {
         action: "create",
         name: "Mamá",
@@ -237,12 +246,34 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
         account_id: bbva.account.id,
         name: "BBVA Débito",
       });
+      const home = await call("manage_category", {
+        action: "create",
+        name: "Hogar",
+        kind: "expense",
+      });
       const food = await call("manage_category", {
         action: "create",
         name: "Comida",
-        kind: "expense",
-        group: "Hogar",
+        parent_id: home.category.id,
       });
+      assert(
+        food.category.parent === "Hogar" && food.category.kind === "expense",
+        "A subcategory must name its parent and take its kind.",
+      );
+      await expectError("manage_category", {
+        action: "create",
+        name: "Despensa",
+        parent_id: food.category.id,
+      }, "parent_is_subcategory");
+      await expectError("manage_category", {
+        action: "update",
+        category_id: home.category.id,
+        parent_id: food.category.id,
+      }, "parent_is_subcategory");
+      await expectError("manage_category", {
+        action: "archive",
+        category_id: home.category.id,
+      }, "has_subcategories");
       await call("manage_payee", {
         action: "create",
         name: "Oxxo",
@@ -312,7 +343,8 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
         group_by: "category",
       });
       assert(
-        summary.totals[0].expense === "180.00" && summary.groups[0].key === "Comida",
+        summary.totals[0].expense === "180.00" && summary.groups[0].key === "Comida" &&
+          summary.groups[0].parent === "Hogar",
         "The summary must exclude transfers and group by category.",
       );
     });
@@ -446,13 +478,13 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
       const ownerId = userId;
       if (ownerId) {
         await database.begin(async (sql) => {
-          const owned = sql`SELECT id FROM app.workspaces WHERE owner_user_id = ${ownerId}`;
-          await sql`DELETE FROM app.transactions WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.payees WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.projects WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.categories WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.accounts WHERE workspace_id IN (${owned})`;
-          await sql`DELETE FROM app.workspaces WHERE owner_user_id = ${ownerId}`;
+          const owned = sql`SELECT id FROM finance.workspaces WHERE owner_user_id = ${ownerId}`;
+          await sql`DELETE FROM finance.transactions WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.payees WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.projects WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.categories WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.accounts WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM finance.workspaces WHERE owner_user_id = ${ownerId}`;
         });
       }
     } catch {

@@ -38,12 +38,12 @@ const createAccount: Action<ManageAccountInput> = async (sql, userId, input) => 
   const kind = input.kind ?? "bank";
   checkOpeningBalance(kind, input.opening_balance);
   const [{ count }] = await sql<{ count: number }[]>`
-    SELECT count(*)::int AS count FROM app.accounts
+    SELECT count(*)::int AS count FROM finance.accounts
     WHERE workspace_id = ${workspace.id} AND archived_at IS NULL`;
   const isDefault = count === 0 || input.is_default === true;
   if (isDefault) await clearDefaultAccount(sql, workspace.id);
   const [account] = await sql<{ id: string }[]>`
-    INSERT INTO app.accounts (workspace_id, name, kind, currency, opening_balance, is_default)
+    INSERT INTO finance.accounts (workspace_id, name, kind, currency, opening_balance, is_default)
     VALUES (${workspace.id}, ${input.name}, ${kind}, ${input.currency ?? workspace.currency},
       ${input.opening_balance ?? "0"}, ${isDefault})
     RETURNING id`;
@@ -55,12 +55,12 @@ const updateAccount: Action<ManageAccountInput> = async (sql, userId, input) => 
   checkOpeningBalance(input.kind ?? account.kind, input.opening_balance);
   if (input.kind && DEBT_KINDS.has(input.kind) && input.opening_balance === undefined) {
     const [current] = await sql<{ opening_balance: string }[]>`
-      SELECT opening_balance::text AS opening_balance FROM app.accounts WHERE id = ${account.id}`;
+      SELECT opening_balance::text AS opening_balance FROM finance.accounts WHERE id = ${account.id}`;
     checkOpeningBalance(input.kind, current.opening_balance);
   }
   if (input.currency && input.currency !== account.currency) {
     const [used] = await sql`
-      SELECT 1 FROM app.transactions
+      SELECT 1 FROM finance.transactions
       WHERE account_id = ${account.id} OR to_account_id = ${account.id} LIMIT 1`;
     if (used) {
       throw fail(
@@ -81,7 +81,9 @@ const updateAccount: Action<ManageAccountInput> = async (sql, userId, input) => 
     opening_balance: input.opening_balance,
     is_default: input.is_default,
   });
-  await sql`UPDATE app.accounts SET ${sql(changes)}, updated_at = now() WHERE id = ${account.id}`;
+  await sql`UPDATE finance.accounts SET ${
+    sql(changes)
+  }, updated_at = now() WHERE id = ${account.id}`;
   return { status: "updated", account: (await accountBalances(sql, workspace.id, account.id))[0] };
 };
 
@@ -90,7 +92,7 @@ const archiveAccount: Action<ManageAccountInput> = async (sql, userId, input) =>
   const summary = { id: account.id, name: account.name };
   if (account.archived_at) return { status: "already_archived", account: summary };
   await sql`
-    UPDATE app.accounts SET archived_at = now(), is_default = false, updated_at = now()
+    UPDATE finance.accounts SET archived_at = now(), is_default = false, updated_at = now()
     WHERE id = ${account.id}`;
   await ensureDefaultAccount(sql, workspace.id);
   return { status: "archived", account: summary };
@@ -108,7 +110,7 @@ const moveAccount: Action<ManageAccountInput> = async (sql, userId, input) => {
   }
   const target = await resolveWorkspace(sql, userId, input.to_workspace_id, true);
   const [transfer] = await sql`
-    SELECT 1 FROM app.transactions
+    SELECT 1 FROM finance.transactions
     WHERE (account_id = ${account.id} AND to_account_id IS NOT NULL) OR to_account_id = ${account.id}
     LIMIT 1`;
   if (transfer) {
@@ -121,14 +123,14 @@ const moveAccount: Action<ManageAccountInput> = async (sql, userId, input) => {
   // References are checked at the end, after the account and its rows have all moved.
   await sql`SET CONSTRAINTS ALL DEFERRED`;
   const [{ count }] = await sql<{ count: number }[]>`
-    SELECT count(*)::int AS count FROM app.accounts
+    SELECT count(*)::int AS count FROM finance.accounts
     WHERE workspace_id = ${target.id} AND archived_at IS NULL`;
   await sql`
-    UPDATE app.accounts SET workspace_id = ${target.id}, is_default = ${count === 0},
+    UPDATE finance.accounts SET workspace_id = ${target.id}, is_default = ${count === 0},
       updated_at = now()
     WHERE id = ${account.id}`;
   const used = await sql<{ category_id: string | null; payee_id: string | null }[]>`
-    SELECT DISTINCT category_id, payee_id FROM app.transactions WHERE account_id = ${account.id}`;
+    SELECT DISTINCT category_id, payee_id FROM finance.transactions WHERE account_id = ${account.id}`;
   const categoryMap = new Map<string, string>();
   const payeeMap = new Map<string, string>();
   for (const row of used) {
@@ -147,7 +149,7 @@ const moveAccount: Action<ManageAccountInput> = async (sql, userId, input) => {
       SELECT * FROM unnest(${sql.array([...payeeMap.keys()], 2950)}::uuid[],
         ${sql.array([...payeeMap.values()], 2950)}::uuid[]) AS m(old_id, new_id)
     ), updated AS (
-      UPDATE app.transactions t SET workspace_id = ${target.id}, project_id = NULL,
+      UPDATE finance.transactions t SET workspace_id = ${target.id}, project_id = NULL,
         category_id = (SELECT new_id FROM category_map WHERE old_id = t.category_id),
         payee_id = (SELECT new_id FROM payee_map WHERE old_id = t.payee_id),
         updated_at = now()
@@ -181,8 +183,8 @@ async function ownedAccount(
 ): Promise<{ workspace: Workspace; account: Account }> {
   if (!input.account_id) throw required("account_id", `${input.action} an account`);
   const [owned] = await sql<{ workspace_id: string }[]>`
-    SELECT a.workspace_id FROM app.accounts a
-    JOIN app.workspaces w ON w.id = a.workspace_id AND w.owner_user_id = ${userId}
+    SELECT a.workspace_id FROM finance.accounts a
+    JOIN finance.workspaces w ON w.id = a.workspace_id AND w.owner_user_id = ${userId}
       AND w.archived_at IS NULL
     WHERE a.id = ${input.account_id}`;
   if (!owned) throw notFound("The account");
@@ -196,17 +198,17 @@ async function ownedAccount(
 
 async function clearDefaultAccount(sql: Sql, workspaceId: string) {
   await sql`
-    UPDATE app.accounts SET is_default = false, updated_at = now()
+    UPDATE finance.accounts SET is_default = false, updated_at = now()
     WHERE workspace_id = ${workspaceId} AND is_default`;
 }
 
 /** Keeps one default account while a workspace still has active accounts. */
 async function ensureDefaultAccount(sql: Sql, workspaceId: string) {
   await sql`
-    UPDATE app.accounts SET is_default = true, updated_at = now()
+    UPDATE finance.accounts SET is_default = true, updated_at = now()
     WHERE id = (
-      SELECT id FROM app.accounts WHERE workspace_id = ${workspaceId} AND archived_at IS NULL
+      SELECT id FROM finance.accounts WHERE workspace_id = ${workspaceId} AND archived_at IS NULL
       ORDER BY created_at LIMIT 1)
     AND NOT EXISTS (
-      SELECT 1 FROM app.accounts WHERE workspace_id = ${workspaceId} AND is_default)`;
+      SELECT 1 FROM finance.accounts WHERE workspace_id = ${workspaceId} AND is_default)`;
 }

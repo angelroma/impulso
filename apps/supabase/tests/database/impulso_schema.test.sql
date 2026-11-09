@@ -12,12 +12,12 @@ CREATE TEMPORARY TABLE expected_tables (
 ) ON COMMIT DROP;
 
 INSERT INTO expected_tables VALUES
-  ('app', 'workspaces'),
-  ('app', 'accounts'),
-  ('app', 'categories'),
-  ('app', 'payees'),
-  ('app', 'projects'),
-  ('app', 'transactions');
+  ('finance', 'workspaces'),
+  ('finance', 'accounts'),
+  ('finance', 'categories'),
+  ('finance', 'payees'),
+  ('finance', 'projects'),
+  ('finance', 'transactions');
 
 CREATE TEMPORARY TABLE expected_auth_views (
   view_name text PRIMARY KEY,
@@ -31,7 +31,7 @@ INSERT INTO expected_auth_views VALUES
   ('oauth_consents', ARRAY['user_id', 'client_id', 'scopes', 'revoked_at']);
 
 SELECT has_schema(schema_name, schema_name || ' schema exists')
-FROM (VALUES ('app'), ('api'), ('private')) AS schemas(schema_name);
+FROM (VALUES ('finance'), ('api'), ('private')) AS schemas(schema_name);
 
 SELECT has_table(schema_name, table_name, schema_name || '.' || table_name || ' exists')
 FROM expected_tables ORDER BY schema_name, table_name;
@@ -79,7 +79,7 @@ FROM (VALUES ('auth_users'), ('auth_sessions')) AS views(view_name);
 
 SELECT is(
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname IN ('app', 'private') AND c.relkind IN ('r', 'p')),
+   WHERE n.nspname IN ('finance', 'private') AND c.relkind IN ('r', 'p')),
   6::bigint,
   'The model contains exactly 6 application tables'
 );
@@ -104,19 +104,19 @@ SELECT ok(
   NOT has_schema_privilege(client.role_name, schema_name, 'USAGE,CREATE'),
   client.role_name || ' has no internal schema privileges on ' || schema_name
 )
-FROM (VALUES ('app'), ('private')) AS schemas(schema_name)
+FROM (VALUES ('finance'), ('private')) AS schemas(schema_name)
 CROSS JOIN (VALUES ('anon'), ('authenticated'), ('service_role')) AS client(role_name);
 
 SELECT is(
   (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE n.nspname IN ('app', 'api', 'private')),
+   WHERE n.nspname IN ('finance', 'api', 'private')),
   0::bigint,
   'Application schemas contain no custom database functions or procedures'
 );
 SELECT is(
   (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
    JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname IN ('app', 'api', 'private') AND NOT t.tgisinternal),
+   WHERE n.nspname IN ('finance', 'api', 'private') AND NOT t.tgisinternal),
   0::bigint,
   'Application tables contain no custom triggers; PostgreSQL retains internal constraint triggers'
 );
@@ -148,66 +148,66 @@ SELECT is(
 );
 
 SELECT ok(
-  has_table_privilege('impulso_backend', 'app.' || e.table_name, 'SELECT,INSERT,UPDATE')
-    AND NOT has_table_privilege('impulso_backend', 'app.' || e.table_name, 'DELETE')
-    AND NOT has_table_privilege('impulso_backend', 'app.' || e.table_name, 'TRUNCATE')
-    AND NOT has_table_privilege('impulso_backend', 'app.' || e.table_name, 'REFERENCES')
-    AND NOT has_table_privilege('impulso_backend', 'app.' || e.table_name, 'TRIGGER'),
-  'The backend can read, insert and edit app.' || e.table_name || ' but never delete it'
+  has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'SELECT,INSERT,UPDATE')
+    AND NOT has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'DELETE')
+    AND NOT has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'TRUNCATE')
+    AND NOT has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'REFERENCES')
+    AND NOT has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'TRIGGER'),
+  'The backend can read, insert and edit finance.' || e.table_name || ' but never delete it'
 )
-FROM expected_tables e WHERE e.schema_name = 'app' ORDER BY e.table_name;
+FROM expected_tables e WHERE e.schema_name = 'finance' ORDER BY e.table_name;
 
 -- Integrity checks use a rolled-back fixture owned by a disposable Auth user.
 INSERT INTO auth.users (id, aud, role, email, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
 VALUES ('00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', 'schema@impulso.test.invalid', now(), '{}'::jsonb, '{}'::jsonb, now(), now());
-INSERT INTO app.workspaces (id, owner_user_id, name, currency, timezone, is_default) VALUES
+INSERT INTO finance.workspaces (id, owner_user_id, name, currency, timezone, is_default) VALUES
   ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000001', 'Yo', 'MXN', 'UTC', true),
   ('00000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-000000000001', 'Mamá', 'MXN', 'UTC', false);
-INSERT INTO app.accounts (id, workspace_id, name, currency, is_default) VALUES
+INSERT INTO finance.accounts (id, workspace_id, name, currency, is_default) VALUES
   ('00000000-0000-4000-8000-000000000021', '00000000-0000-4000-8000-000000000011', 'BBVA', 'MXN', true),
   ('00000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000012', 'Banorte', 'MXN', true);
-INSERT INTO app.categories (id, workspace_id, name, kind) VALUES
+INSERT INTO finance.categories (id, workspace_id, name, kind) VALUES
   ('00000000-0000-4000-8000-000000000031', '00000000-0000-4000-8000-000000000011', 'Comida', 'expense');
 
 SELECT throws_ok(
-  $$INSERT INTO app.workspaces (owner_user_id, name, currency, timezone, is_default)
+  $$INSERT INTO finance.workspaces (owner_user_id, name, currency, timezone, is_default)
     VALUES ('00000000-0000-4000-8000-000000000001', 'Otro', 'MXN', 'UTC', true)$$,
   '23505', NULL, 'A user has at most one default workspace'
 );
 SELECT throws_ok(
-  $$INSERT INTO app.accounts (workspace_id, name, currency)
+  $$INSERT INTO finance.accounts (workspace_id, name, currency)
     VALUES ('00000000-0000-4000-8000-000000000011', 'bbva', 'MXN')$$,
   '23505', NULL, 'Active account names are unique per workspace regardless of case'
 );
 SELECT throws_ok(
-  $$INSERT INTO app.transactions (workspace_id, account_id, kind, amount, occurred_on, category_id, request_id)
+  $$INSERT INTO finance.transactions (workspace_id, account_id, kind, amount, occurred_on, category_id, request_id)
     VALUES ('00000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-000000000022', 'expense', 10,
       '2026-11-09', '00000000-0000-4000-8000-000000000031', gen_random_uuid())$$,
   '23503', NULL, 'A transaction cannot use a category from another workspace'
 );
 SELECT throws_ok(
-  $$INSERT INTO app.transactions (workspace_id, account_id, kind, amount, occurred_on, request_id)
+  $$INSERT INTO finance.transactions (workspace_id, account_id, kind, amount, occurred_on, request_id)
     VALUES ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000021', 'transfer', 10,
       '2026-11-09', gen_random_uuid())$$,
   '23514', NULL, 'A transfer requires a destination account'
 );
 SELECT throws_ok(
-  $$INSERT INTO app.transactions (workspace_id, account_id, kind, amount, occurred_on, request_id)
+  $$INSERT INTO finance.transactions (workspace_id, account_id, kind, amount, occurred_on, request_id)
     VALUES ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000021', 'expense', 0,
       '2026-11-09', gen_random_uuid())$$,
   '23514', NULL, 'Amounts are positive'
 );
 SELECT lives_ok(
-  $$INSERT INTO app.transactions (id, workspace_id, account_id, kind, amount, occurred_on, category_id, request_id)
+  $$INSERT INTO finance.transactions (id, workspace_id, account_id, kind, amount, occurred_on, category_id, request_id)
     VALUES ('00000000-0000-4000-8000-000000000041', '00000000-0000-4000-8000-000000000011',
       '00000000-0000-4000-8000-000000000021', 'expense', 10, '2026-11-09',
       '00000000-0000-4000-8000-000000000031', gen_random_uuid())$$,
   'A valid expense is accepted'
 );
 SET CONSTRAINTS ALL DEFERRED;
-UPDATE app.accounts SET workspace_id = '00000000-0000-4000-8000-000000000012', is_default = false
+UPDATE finance.accounts SET workspace_id = '00000000-0000-4000-8000-000000000012', is_default = false
   WHERE id = '00000000-0000-4000-8000-000000000021';
-UPDATE app.transactions SET workspace_id = '00000000-0000-4000-8000-000000000012', category_id = NULL
+UPDATE finance.transactions SET workspace_id = '00000000-0000-4000-8000-000000000012', category_id = NULL
   WHERE account_id = '00000000-0000-4000-8000-000000000021';
 SELECT lives_ok(
   'SET CONSTRAINTS ALL IMMEDIATE',

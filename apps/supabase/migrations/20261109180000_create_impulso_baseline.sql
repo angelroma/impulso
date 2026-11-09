@@ -12,7 +12,7 @@ END;
 $infrastructure$;
 
 
-CREATE SCHEMA IF NOT EXISTS app;
+CREATE SCHEMA IF NOT EXISTS finance;
 
 CREATE SCHEMA IF NOT EXISTS api;
 
@@ -48,7 +48,7 @@ REVOKE ALL ON TABLE private.oauth_consents FROM PUBLIC, anon, authenticated, ser
 
 -- Independent containers owned by one user, for example "Yo", "Mamá" or "Negocio".
 
-CREATE TABLE app.workspaces (
+CREATE TABLE finance.workspaces (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
@@ -61,19 +61,19 @@ CREATE TABLE app.workspaces (
     CHECK (NOT (is_default AND archived_at IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX workspaces_one_default_idx ON app.workspaces (owner_user_id) WHERE is_default;
+CREATE UNIQUE INDEX workspaces_one_default_idx ON finance.workspaces (owner_user_id) WHERE is_default;
 
-CREATE UNIQUE INDEX workspaces_active_name_idx ON app.workspaces (owner_user_id, lower(name)) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX workspaces_active_name_idx ON finance.workspaces (owner_user_id, lower(name)) WHERE archived_at IS NULL;
 
-ALTER TABLE app.workspaces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.workspaces ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.workspaces FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.workspaces FROM PUBLIC, anon, authenticated, service_role;
 
 -- Accounts can be renamed and moved to another workspace together with their transactions.
 
-CREATE TABLE app.accounts (
+CREATE TABLE finance.accounts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     kind text NOT NULL DEFAULT 'bank' CHECK (kind IN ('cash', 'bank', 'credit_card', 'loan', 'investment')),
     currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
@@ -86,61 +86,67 @@ CREATE TABLE app.accounts (
     CHECK (NOT (is_default AND archived_at IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX accounts_one_default_idx ON app.accounts (workspace_id) WHERE is_default;
+CREATE UNIQUE INDEX accounts_one_default_idx ON finance.accounts (workspace_id) WHERE is_default;
 
-CREATE UNIQUE INDEX accounts_active_name_idx ON app.accounts (workspace_id, lower(name)) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX accounts_active_name_idx ON finance.accounts (workspace_id, lower(name)) WHERE archived_at IS NULL;
 
-ALTER TABLE app.accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.accounts ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.accounts FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.accounts FROM PUBLIC, anon, authenticated, service_role;
 
--- Income or expense labels with an optional one-level text group such as "Hogar".
+-- Income or expense labels. A category is general ("Suscripciones"); who was paid is a payee.
+-- parent_id makes it a subcategory of a top-level category of the same kind ("Vivienda" > "Renta").
 
-CREATE TABLE app.categories (
+CREATE TABLE finance.categories (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
-    group_name text CHECK (group_name IS NULL OR char_length(btrim(group_name)) BETWEEN 1 AND 100),
+    parent_id uuid,
     kind text NOT NULL CHECK (kind IN ('income', 'expense')),
     archived_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (workspace_id, id)
+    UNIQUE (workspace_id, id),
+    UNIQUE (workspace_id, id, kind),
+    FOREIGN KEY (workspace_id, parent_id, kind) REFERENCES finance.categories(workspace_id, id, kind) ON DELETE RESTRICT,
+    CHECK (parent_id IS NULL OR parent_id <> id)
 );
 
-CREATE UNIQUE INDEX categories_active_name_idx ON app.categories (workspace_id, kind, lower(name)) WHERE archived_at IS NULL;
+CREATE INDEX categories_parent_idx ON finance.categories (workspace_id, parent_id) WHERE parent_id IS NOT NULL;
 
-ALTER TABLE app.categories ENABLE ROW LEVEL SECURITY;
+CREATE UNIQUE INDEX categories_active_name_idx ON finance.categories (workspace_id, kind, lower(name)) WHERE archived_at IS NULL;
 
-REVOKE ALL ON TABLE app.categories FROM PUBLIC, anon, authenticated, service_role;
+ALTER TABLE finance.categories ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE finance.categories FROM PUBLIC, anon, authenticated, service_role;
 
 -- Who was paid or who paid; the default category lets a known payee skip categorization questions.
 
-CREATE TABLE app.payees (
+CREATE TABLE finance.payees (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     default_category_id uuid,
     archived_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (workspace_id, id),
-    FOREIGN KEY (workspace_id, default_category_id) REFERENCES app.categories(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE
+    FOREIGN KEY (workspace_id, default_category_id) REFERENCES finance.categories(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE
 );
 
-CREATE UNIQUE INDEX payees_active_name_idx ON app.payees (workspace_id, lower(name)) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX payees_active_name_idx ON finance.payees (workspace_id, lower(name)) WHERE archived_at IS NULL;
 
-CREATE INDEX payees_default_category_idx ON app.payees (workspace_id, default_category_id);
+CREATE INDEX payees_default_category_idx ON finance.payees (workspace_id, default_category_id);
 
-ALTER TABLE app.payees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.payees ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.payees FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.payees FROM PUBLIC, anon, authenticated, service_role;
 
 -- Cross-category buckets such as "Viaje Japón"; spent and remaining are computed from transactions.
 
-CREATE TABLE app.projects (
+CREATE TABLE finance.projects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
     budget numeric(14,2) CHECK (budget IS NULL OR budget > 0),
@@ -153,19 +159,19 @@ CREATE TABLE app.projects (
     CHECK (start_date IS NULL OR end_date IS NULL OR end_date >= start_date)
 );
 
-CREATE UNIQUE INDEX projects_name_idx ON app.projects (workspace_id, lower(name));
+CREATE UNIQUE INDEX projects_name_idx ON finance.projects (workspace_id, lower(name));
 
-ALTER TABLE app.projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.projects ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.projects FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.projects FROM PUBLIC, anon, authenticated, service_role;
 
 -- One row per income, expense or transfer. Rows are editable; deleted_at is a restorable soft delete.
 -- Composite keys keep every reference inside the row's workspace. They are deferrable so an
 -- account and its transactions can move to another workspace inside one transaction.
 
-CREATE TABLE app.transactions (
+CREATE TABLE finance.transactions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     account_id uuid NOT NULL,
     to_account_id uuid,
     kind text NOT NULL CHECK (kind IN ('income', 'expense', 'transfer')),
@@ -179,58 +185,58 @@ CREATE TABLE app.transactions (
     deleted_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (workspace_id, account_id) REFERENCES app.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
-    FOREIGN KEY (workspace_id, to_account_id) REFERENCES app.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
-    FOREIGN KEY (workspace_id, payee_id) REFERENCES app.payees(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
-    FOREIGN KEY (workspace_id, category_id) REFERENCES app.categories(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
-    FOREIGN KEY (workspace_id, project_id) REFERENCES app.projects(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, account_id) REFERENCES finance.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, to_account_id) REFERENCES finance.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, payee_id) REFERENCES finance.payees(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, category_id) REFERENCES finance.categories(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, project_id) REFERENCES finance.projects(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     CHECK ((kind = 'transfer') = (to_account_id IS NOT NULL)),
     CHECK (to_account_id IS NULL OR to_account_id <> account_id),
     CHECK (kind <> 'transfer' OR category_id IS NULL)
 );
 
-CREATE INDEX transactions_workspace_date_idx ON app.transactions (workspace_id, occurred_on DESC, id);
+CREATE INDEX transactions_workspace_date_idx ON finance.transactions (workspace_id, occurred_on DESC, id);
 
-CREATE INDEX transactions_account_idx ON app.transactions (workspace_id, account_id);
+CREATE INDEX transactions_account_idx ON finance.transactions (workspace_id, account_id);
 
-CREATE INDEX transactions_to_account_idx ON app.transactions (workspace_id, to_account_id) WHERE to_account_id IS NOT NULL;
+CREATE INDEX transactions_to_account_idx ON finance.transactions (workspace_id, to_account_id) WHERE to_account_id IS NOT NULL;
 
-CREATE INDEX transactions_payee_idx ON app.transactions (workspace_id, payee_id) WHERE payee_id IS NOT NULL;
+CREATE INDEX transactions_payee_idx ON finance.transactions (workspace_id, payee_id) WHERE payee_id IS NOT NULL;
 
-CREATE INDEX transactions_category_idx ON app.transactions (workspace_id, category_id) WHERE category_id IS NOT NULL;
+CREATE INDEX transactions_category_idx ON finance.transactions (workspace_id, category_id) WHERE category_id IS NOT NULL;
 
-CREATE INDEX transactions_project_idx ON app.transactions (workspace_id, project_id) WHERE project_id IS NOT NULL;
+CREATE INDEX transactions_project_idx ON finance.transactions (workspace_id, project_id) WHERE project_id IS NOT NULL;
 
-ALTER TABLE app.transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.transactions ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.transactions FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.transactions FROM PUBLIC, anon, authenticated, service_role;
 
 -- Client access remains closed; Edge Functions authorize every application operation.
 
-REVOKE ALL ON SCHEMA app, api, private FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON SCHEMA finance, api, private FROM PUBLIC, anon, authenticated, service_role;
 
 GRANT USAGE ON SCHEMA api TO anon, authenticated, service_role;
 
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA app, api, private FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA finance, api, private FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES IN SCHEMA app, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA finance, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA finance, api, private REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES IN SCHEMA app, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA finance, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA finance, api, private REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated, service_role;
 
-GRANT USAGE ON SCHEMA app, private TO impulso_backend;
+GRANT USAGE ON SCHEMA finance, private TO impulso_backend;
 
 -- Records are editable; removal is a soft delete or archive, so the backend never receives DELETE.
 GRANT SELECT, INSERT, UPDATE ON TABLE
-    app.workspaces,
-    app.accounts,
-    app.categories,
-    app.payees,
-    app.projects,
-    app.transactions
+    finance.workspaces,
+    finance.accounts,
+    finance.categories,
+    finance.payees,
+    finance.projects,
+    finance.transactions
 TO impulso_backend;
 
 -- Owner-checked projections expose only Auth identifiers and grant state; locks reach base rows.

@@ -1,9 +1,9 @@
--- Declarative definition: apps/supabase/schemas/app/tables/accounts.sql.
+-- Declarative definition: apps/supabase/schemas/finance/tables/accounts.sql.
 -- Accounts can be renamed and moved to another workspace together with their transactions.
 
-CREATE TABLE app.accounts (
+CREATE TABLE finance.accounts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
+    workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     kind text NOT NULL DEFAULT 'bank' CHECK (kind IN ('cash', 'bank', 'credit_card', 'loan', 'investment')),
     currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
@@ -16,10 +16,10 @@ CREATE TABLE app.accounts (
     CHECK (NOT (is_default AND archived_at IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX accounts_one_default_idx ON app.accounts (workspace_id) WHERE is_default;
+CREATE UNIQUE INDEX accounts_one_default_idx ON finance.accounts (workspace_id) WHERE is_default;
 
-CREATE UNIQUE INDEX accounts_active_name_idx ON app.accounts (workspace_id, lower(name)) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX accounts_active_name_idx ON finance.accounts (workspace_id, lower(name)) WHERE archived_at IS NULL;
 
-ALTER TABLE app.accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finance.accounts ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE app.accounts FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE finance.accounts FROM PUBLIC, anon, authenticated, service_role;

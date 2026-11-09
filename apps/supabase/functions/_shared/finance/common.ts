@@ -77,10 +77,10 @@ export async function resolveWorkspace(
   const locking = lock ? sql`FOR UPDATE` : sql``;
   const [workspace] = workspaceId
     ? await sql<Workspace[]>`
-      SELECT id, name, currency, timezone, is_default FROM app.workspaces
+      SELECT id, name, currency, timezone, is_default FROM finance.workspaces
       WHERE id = ${workspaceId} AND owner_user_id = ${userId} AND archived_at IS NULL ${locking}`
     : await sql<Workspace[]>`
-      SELECT id, name, currency, timezone, is_default FROM app.workspaces
+      SELECT id, name, currency, timezone, is_default FROM finance.workspaces
       WHERE owner_user_id = ${userId} AND is_default AND archived_at IS NULL ${locking}`;
   if (workspace) return workspace;
   if (workspaceId) throw notFound("The workspace");
@@ -109,7 +109,7 @@ export async function findAccount(
 ): Promise<Account> {
   const locking = lock ? sql`FOR UPDATE` : sql``;
   const [account] = await sql<Account[]>`
-    SELECT id, workspace_id, name, kind, currency, archived_at FROM app.accounts
+    SELECT id, workspace_id, name, kind, currency, archived_at FROM finance.accounts
     WHERE id = ${accountId} AND workspace_id = ${workspaceId} ${locking}`;
   if (!account) throw notFound("The account");
   return account;
@@ -130,7 +130,7 @@ export async function activeAccount(
     return account;
   }
   const [account] = await sql<Account[]>`
-    SELECT id, workspace_id, name, kind, currency, archived_at FROM app.accounts
+    SELECT id, workspace_id, name, kind, currency, archived_at FROM finance.accounts
     WHERE workspace_id = ${workspaceId} AND is_default AND archived_at IS NULL`;
   if (!account) {
     throw fail(
@@ -149,7 +149,7 @@ export async function activeCategory(
   kind?: string,
 ): Promise<string> {
   const [category] = await sql<{ id: string; kind: string }[]>`
-    SELECT id, kind FROM app.categories
+    SELECT id, kind FROM finance.categories
     WHERE id = ${categoryId} AND workspace_id = ${workspaceId} AND archived_at IS NULL`;
   if (!category) throw notFound("The category");
   if (kind && category.kind !== kind) {
@@ -160,7 +160,7 @@ export async function activeCategory(
 
 export async function activeProject(sql: Sql, workspaceId: string, projectId: string) {
   const [project] = await sql<{ status: string }[]>`
-    SELECT status FROM app.projects WHERE id = ${projectId} AND workspace_id = ${workspaceId}`;
+    SELECT status FROM finance.projects WHERE id = ${projectId} AND workspace_id = ${workspaceId}`;
   if (!project) throw notFound("The project");
   if (project.status !== "active") throw fail(409, "project_closed", "That project is closed.");
   return projectId;
@@ -177,37 +177,56 @@ export interface Payee {
  */
 export async function payeeByName(sql: Sql, workspaceId: string, name: string): Promise<Payee> {
   const [created] = await sql<Payee[]>`
-    INSERT INTO app.payees (workspace_id, name) VALUES (${workspaceId}, ${name})
+    INSERT INTO finance.payees (workspace_id, name) VALUES (${workspaceId}, ${name})
     ON CONFLICT (workspace_id, lower(name)) WHERE archived_at IS NULL DO NOTHING
     RETURNING id, default_category_id`;
   if (created) return created;
   const [existing] = await sql<Payee[]>`
-    SELECT id, default_category_id FROM app.payees
+    SELECT id, default_category_id FROM finance.payees
     WHERE workspace_id = ${workspaceId} AND lower(name) = lower(${name}) AND archived_at IS NULL`;
   return existing;
 }
 
-/** Maps a category to the same name and kind in another workspace, creating it when missing. */
-export async function mapCategory(sql: Sql, categoryId: string | null, targetWorkspaceId: string) {
+/**
+ * Maps a category to the same name and kind in another workspace, creating it when missing. A new
+ * subcategory keeps its parent when the target's category of that name is top-level.
+ */
+export async function mapCategory(
+  sql: Sql,
+  categoryId: string | null,
+  targetWorkspaceId: string,
+): Promise<string | null> {
   if (!categoryId) return null;
-  const [source] = await sql<{ name: string; kind: string; group_name: string | null }[]>`
-    SELECT name, kind, group_name FROM app.categories WHERE id = ${categoryId}`;
+  const [source] = await sql<{ name: string; kind: string; parent_id: string | null }[]>`
+    SELECT name, kind, parent_id FROM finance.categories WHERE id = ${categoryId}`;
+  const find = async () => {
+    const [match] = await sql<{ id: string }[]>`
+      SELECT id FROM finance.categories
+      WHERE workspace_id = ${targetWorkspaceId} AND kind = ${source.kind}
+        AND lower(name) = lower(${source.name}) AND archived_at IS NULL`;
+    return match?.id;
+  };
+  const existing = await find();
+  if (existing) return existing;
+  const parentId = await mapCategory(sql, source.parent_id, targetWorkspaceId);
+  const [parent] = parentId
+    ? await sql<{ id: string }[]>`
+      SELECT id FROM finance.categories WHERE id = ${parentId} AND parent_id IS NULL`
+    : [];
   const [created] = await sql<{ id: string }[]>`
-    INSERT INTO app.categories (workspace_id, name, kind, group_name)
-    VALUES (${targetWorkspaceId}, ${source.name}, ${source.kind}, ${source.group_name})
+    INSERT INTO finance.categories (workspace_id, name, kind, parent_id)
+    VALUES (${targetWorkspaceId}, ${source.name}, ${source.kind}, ${parent?.id ?? null})
     ON CONFLICT (workspace_id, kind, lower(name)) WHERE archived_at IS NULL DO NOTHING
     RETURNING id`;
-  if (created) return created.id;
-  const [match] = await sql<{ id: string }[]>`
-    SELECT id FROM app.categories
-    WHERE workspace_id = ${targetWorkspaceId} AND kind = ${source.kind}
-      AND lower(name) = lower(${source.name}) AND archived_at IS NULL`;
-  return match.id;
+  // No row back means another request created it first.
+  return created?.id ?? (await find()) ?? null;
 }
 
 export async function mapPayee(sql: Sql, payeeId: string | null, targetWorkspaceId: string) {
   if (!payeeId) return null;
-  const [source] = await sql<{ name: string }[]>`SELECT name FROM app.payees WHERE id = ${payeeId}`;
+  const [source] = await sql<
+    { name: string }[]
+  >`SELECT name FROM finance.payees WHERE id = ${payeeId}`;
   return (await payeeByName(sql, targetWorkspaceId, source.name)).id;
 }
 
@@ -222,8 +241,8 @@ export async function accountBalances(sql: Sql, workspaceId: string, accountId?:
           WHEN t.account_id = a.id THEN -t.amount
           WHEN t.to_account_id = a.id THEN t.amount
         END), 0))::text AS balance
-    FROM app.accounts a
-    LEFT JOIN app.transactions t ON t.workspace_id = a.workspace_id AND t.deleted_at IS NULL
+    FROM finance.accounts a
+    LEFT JOIN finance.transactions t ON t.workspace_id = a.workspace_id AND t.deleted_at IS NULL
       AND (t.account_id = a.id OR t.to_account_id = a.id)
     WHERE a.workspace_id = ${workspaceId} AND a.archived_at IS NULL ${only}
     GROUP BY a.id
@@ -245,9 +264,9 @@ export async function projectProgress(
         - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0))::text AS spent,
       (pr.budget - (COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'expense'), 0)
         - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0)))::text AS remaining
-    FROM app.projects pr
-    LEFT JOIN app.transactions t ON t.project_id = pr.id AND t.deleted_at IS NULL
-      AND EXISTS (SELECT 1 FROM app.accounts a WHERE a.id = t.account_id AND a.currency = ${currency})
+    FROM finance.projects pr
+    LEFT JOIN finance.transactions t ON t.project_id = pr.id AND t.deleted_at IS NULL
+      AND EXISTS (SELECT 1 FROM finance.accounts a WHERE a.id = t.account_id AND a.currency = ${currency})
     WHERE pr.workspace_id = ${workspaceId} ${status}
     GROUP BY pr.id ORDER BY lower(pr.name)`;
   return rows.map(compact);
@@ -260,13 +279,13 @@ export async function loadTransaction(sql: Sql, transactionId: string): Promise<
       w.name AS workspace, a.name AS account, ta.name AS to_account, p.name AS payee,
       c.name AS category, pr.name AS project, t.notes,
       CASE WHEN t.deleted_at IS NOT NULL THEN true END AS deleted
-    FROM app.transactions t
-    JOIN app.workspaces w ON w.id = t.workspace_id
-    JOIN app.accounts a ON a.id = t.account_id
-    LEFT JOIN app.accounts ta ON ta.id = t.to_account_id
-    LEFT JOIN app.payees p ON p.id = t.payee_id
-    LEFT JOIN app.categories c ON c.id = t.category_id
-    LEFT JOIN app.projects pr ON pr.id = t.project_id
+    FROM finance.transactions t
+    JOIN finance.workspaces w ON w.id = t.workspace_id
+    JOIN finance.accounts a ON a.id = t.account_id
+    LEFT JOIN finance.accounts ta ON ta.id = t.to_account_id
+    LEFT JOIN finance.payees p ON p.id = t.payee_id
+    LEFT JOIN finance.categories c ON c.id = t.category_id
+    LEFT JOIN finance.projects pr ON pr.id = t.project_id
     WHERE t.id = ${transactionId}`;
   return compact(row);
 }

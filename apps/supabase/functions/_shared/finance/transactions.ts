@@ -87,7 +87,7 @@ async function resolveLinks(
       category = await activeCategory(sql, workspaceId, categoryId, kind);
     } else if (categoryId === undefined && payee?.default_category_id) {
       const [fallback] = await sql<{ id: string }[]>`
-        SELECT id FROM app.categories WHERE id = ${payee.default_category_id}
+        SELECT id FROM finance.categories WHERE id = ${payee.default_category_id}
           AND kind = ${kind} AND archived_at IS NULL`;
       category = fallback?.id ?? null;
     }
@@ -111,8 +111,8 @@ async function resolveLinks(
 export async function recordTransaction(sql: Sql, userId: string, input: RecordTransactionInput) {
   // The caller already holds the request_id lock, so a retry cannot race this check.
   const [existing] = await sql<{ id: string; owner_user_id: string }[]>`
-    SELECT t.id, w.owner_user_id FROM app.transactions t
-    JOIN app.workspaces w ON w.id = t.workspace_id WHERE t.request_id = ${input.request_id}`;
+    SELECT t.id, w.owner_user_id FROM finance.transactions t
+    JOIN finance.workspaces w ON w.id = t.workspace_id WHERE t.request_id = ${input.request_id}`;
   if (existing) {
     if (existing.owner_user_id !== userId) {
       throw fail(409, "request_conflict", "Use a new request_id for a new transaction.");
@@ -130,7 +130,7 @@ export async function recordTransaction(sql: Sql, userId: string, input: RecordT
   });
   const date = input.date ?? await today(sql, workspace.timezone);
   const [created] = await sql<{ id: string }[]>`
-    INSERT INTO app.transactions (workspace_id, account_id, to_account_id, kind, amount,
+    INSERT INTO finance.transactions (workspace_id, account_id, to_account_id, kind, amount,
       occurred_on, payee_id, category_id, project_id, notes, request_id)
     VALUES (${workspace.id}, ${links.account_id}, ${links.to_account_id}, ${input.kind},
       ${input.amount}, ${date}, ${links.payee_id}, ${links.category_id}, ${links.project_id},
@@ -184,7 +184,7 @@ const editTransaction: Action<UpdateTransactionInput> = async (sql, userId, inpu
     notes: input.notes,
     ...links,
   });
-  await sql`UPDATE app.transactions SET ${
+  await sql`UPDATE finance.transactions SET ${
     sql(changes)
   }, updated_at = now() WHERE id = ${current.id}`;
   return { status: "updated", transaction: await loadTransaction(sql, current.id) };
@@ -195,7 +195,7 @@ function setDeleted(deleted: boolean): Action<UpdateTransactionInput> {
   return async (sql, userId, input) => {
     const current = await ownedTransaction(sql, userId, input, { notDeleted: false });
     await sql`
-      UPDATE app.transactions
+      UPDATE finance.transactions
       SET deleted_at = ${deleted ? sql`now()` : null}, updated_at = now()
       WHERE id = ${current.id}`;
     return {
@@ -215,7 +215,7 @@ const moveTransaction: Action<UpdateTransactionInput> = async (sql, userId, inpu
   const target = await resolveWorkspace(sql, userId, input.to_workspace_id);
   const account = await activeAccount(sql, target.id, input.account_id);
   const [source] = await sql<{ currency: string }[]>`
-    SELECT currency FROM app.accounts WHERE id = ${current.account_id}`;
+    SELECT currency FROM finance.accounts WHERE id = ${current.account_id}`;
   if (source.currency !== account.currency) {
     throw fail(409, "currency_mismatch", "Choose an account with the same currency.");
   }
@@ -236,7 +236,7 @@ const moveTransaction: Action<UpdateTransactionInput> = async (sql, userId, inpu
   const category = await mapCategory(sql, current.category_id, target.id);
   const payee = await mapPayee(sql, current.payee_id, target.id);
   await sql`
-    UPDATE app.transactions SET workspace_id = ${target.id}, account_id = ${account.id},
+    UPDATE finance.transactions SET workspace_id = ${target.id}, account_id = ${account.id},
       to_account_id = ${toAccount}, category_id = ${category}, payee_id = ${payee},
       project_id = NULL, updated_at = now()
     WHERE id = ${current.id}`;
@@ -263,8 +263,8 @@ async function ownedTransaction(
   const [current] = await sql<CurrentTransaction[]>`
     SELECT t.id, t.workspace_id, t.account_id, t.to_account_id, t.kind, t.payee_id,
       t.category_id, t.project_id, t.deleted_at
-    FROM app.transactions t
-    JOIN app.workspaces w ON w.id = t.workspace_id AND w.owner_user_id = ${userId}
+    FROM finance.transactions t
+    JOIN finance.workspaces w ON w.id = t.workspace_id AND w.owner_user_id = ${userId}
       AND w.archived_at IS NULL
     WHERE t.id = ${input.transaction_id} FOR UPDATE OF t`;
   if (!current) throw notFound("The transaction");
