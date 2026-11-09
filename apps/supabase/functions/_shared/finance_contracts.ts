@@ -1,301 +1,225 @@
-import { isUuid } from "./auth.ts";
-import { CURRENCY_MINOR_UNITS } from "./currency_snapshot.ts";
-import { ApiError } from "./http.ts";
+import { z } from "zod";
 
-export interface FinanceContextInput {
-  readonly workspace_id: string;
-  readonly book_id?: string;
-  readonly cursor?: string;
-}
+// Closed tool inputs. Each tool is one flat object with an optional `action`, so clients can
+// render it easily; the service checks which fields each action needs.
 
-export interface CreateBookInput {
-  readonly request_id: string;
-  readonly workspace_id: string;
-  readonly name: string;
-  readonly currency: string;
-}
+const uuid = z.string().uuid();
+// deno-lint-ignore no-control-regex
+const controlCharacters = /[\u0000-\u001f\u007f]/;
+const name = z.string().trim().min(1).max(100).refine((value) => !controlCharacters.test(value), {
+  message: "Names cannot contain control characters.",
+});
+const notes = z.string().trim().max(2000).refine((value) => !value.includes("\u0000"));
+const currency = z.string().regex(/^[A-Z]{3}$/, "Use a three-letter ISO currency code.");
+const amount = z.string().regex(
+  /^\d{1,12}(\.\d{1,2})?$/,
+  'Use a positive decimal string with up to two decimals, for example "250.50".',
+);
+const signedAmount = z.string().regex(
+  /^-?\d{1,12}(\.\d{1,2})?$/,
+  "Use a decimal string with up to two decimals.",
+);
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
+const accountKind = z.enum(["cash", "bank", "credit_card", "loan", "investment"]);
+const transactionKind = z.enum(["income", "expense", "transfer"]);
 
-export interface CreateAccountInput extends CreateBookInput {
-  readonly book_id: string;
-  readonly opening_balance: string;
-  readonly person_id: string | null;
-}
+export const getContextInput = z.object({
+  workspace_id: uuid.optional().describe("Omit to use the default workspace."),
+}).strict();
 
-export interface RecordExpenseInput {
-  readonly request_id: string;
-  readonly workspace_id: string;
-  readonly book_id: string;
-  readonly source_account_id: string;
-  readonly amount: string;
-  readonly currency: string;
-  readonly occurred_on: string;
-  readonly description: string;
-  readonly beneficiary_person_id: string | null;
-}
+export const manageWorkspaceInput = z.object({
+  action: z.enum(["create", "update", "archive"]),
+  workspace_id: uuid.optional().describe("Required for update and archive."),
+  name: name.optional(),
+  currency: currency.optional().describe("Required for create, for example MXN."),
+  timezone: z.string().min(1).max(64).optional().describe(
+    "IANA zone such as America/Mexico_City. Required for create.",
+  ),
+  is_default: z.boolean().optional(),
+}).strict();
 
-export interface FinanceBookSummary {
-  readonly id: string;
-  readonly name: string;
-  readonly currency: string;
-  readonly minor_unit: number;
-  readonly role: "owner" | "editor" | "viewer";
-  readonly can_create_account: boolean;
-  readonly can_record_expense: boolean;
-}
+export const manageAccountInput = z.object({
+  action: z.enum(["create", "update", "archive", "move"]),
+  workspace_id: uuid.optional().describe("Workspace for create; omit to use the default."),
+  account_id: uuid.optional().describe("Required for update, archive and move."),
+  name: name.optional(),
+  kind: accountKind.optional(),
+  currency: currency.optional().describe("Defaults to the workspace currency on create."),
+  opening_balance: signedAmount.optional().describe(
+    "Starting balance. Use a negative amount for money owed on a credit_card or loan.",
+  ),
+  is_default: z.boolean().optional(),
+  to_workspace_id: uuid.optional().describe("Required for move; transactions move too."),
+}).strict();
 
-export interface FinanceAccountSummary {
-  readonly id: string;
-  readonly name: string;
-  readonly currency: string;
-  readonly person_id: string | null;
-}
+export const manageCategoryInput = z.object({
+  action: z.enum(["create", "update", "archive"]),
+  workspace_id: uuid.optional(),
+  category_id: uuid.optional().describe("Required for update and archive."),
+  name: name.optional(),
+  kind: z.enum(["income", "expense"]).optional().describe("Required for create."),
+  group: name.nullable().optional().describe("Optional group such as Hogar; null clears it."),
+}).strict();
 
-export interface FinanceContextResult {
-  readonly workspace_id: string;
-  readonly timezone: string;
-  readonly current_local_date: string;
-  readonly self: { readonly person_id: string; readonly display_name: string } | null;
-  readonly books: readonly FinanceBookSummary[];
-  readonly accounts: readonly FinanceAccountSummary[];
-  readonly selected_book: FinanceBookSummary | null;
-  readonly next_cursor: string | null;
-  readonly can_create_book: boolean;
-}
+export const managePayeeInput = z.object({
+  action: z.enum(["create", "update", "archive", "merge"]),
+  workspace_id: uuid.optional(),
+  payee_id: uuid.optional().describe("Required for update, archive and merge."),
+  name: name.optional(),
+  default_category_id: uuid.nullable().optional(),
+  into_payee_id: uuid.optional().describe("Merge target; its transactions keep this payee."),
+}).strict();
 
-export interface CreateBookResult {
-  readonly status: "created" | "already_processed";
-  readonly workspace_id: string;
-  readonly book_id: string;
-  readonly name: string;
-  readonly currency: string;
-  readonly minor_unit: number;
-}
+export const manageProjectInput = z.object({
+  action: z.enum(["create", "update", "close", "reopen"]),
+  workspace_id: uuid.optional(),
+  project_id: uuid.optional().describe("Required except for create."),
+  name: name.optional(),
+  budget: amount.nullable().optional(),
+  start_date: date.nullable().optional(),
+  end_date: date.nullable().optional(),
+  notes: notes.nullable().optional(),
+}).strict();
 
-export interface CreateAccountResult {
-  readonly status: "created" | "already_processed";
-  readonly workspace_id: string;
-  readonly book_id: string;
-  readonly account_id: string;
-  readonly name: string;
-  readonly currency: string;
-  readonly opening_balance: string;
-  readonly person_id: string | null;
-}
+export const recordTransactionInput = z.object({
+  request_id: uuid.describe("New UUID per transaction; reuse it only to retry the same one."),
+  workspace_id: uuid.optional().describe("Omit to use the default workspace."),
+  kind: transactionKind,
+  amount,
+  date: date.optional().describe("Defaults to today in the workspace time zone."),
+  account_id: uuid.optional().describe("Omit to use the workspace's default account."),
+  to_account_id: uuid.optional().describe("Destination account; transfers only."),
+  payee: name.optional().describe("Payee name; created automatically when new."),
+  category_id: uuid.optional().describe("Omit to use the payee's default category."),
+  project_id: uuid.optional(),
+  notes: notes.optional(),
+}).strict();
 
-export interface RecordExpenseResult {
-  readonly status: "created" | "already_processed";
-  readonly workspace_id: string;
-  readonly book_id: string;
-  readonly source_account_id: string;
-  readonly transaction_id: string;
-  readonly amount: string;
-  readonly currency: string;
-  readonly occurred_on: string;
-  readonly description: string;
-  readonly beneficiary_person_id: string | null;
-}
+export const updateTransactionInput = z.object({
+  action: z.enum(["edit", "delete", "restore", "move"]),
+  transaction_id: uuid,
+  kind: transactionKind.optional(),
+  amount: amount.optional(),
+  date: date.optional(),
+  account_id: uuid.optional(),
+  to_account_id: uuid.nullable().optional(),
+  payee: name.nullable().optional().describe("Payee name; null clears it."),
+  category_id: uuid.nullable().optional(),
+  project_id: uuid.nullable().optional(),
+  notes: notes.nullable().optional(),
+  to_workspace_id: uuid.optional().describe("Required for move."),
+}).strict();
 
-function closedObject(value: unknown, fields: readonly string[]): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new ApiError(400, "invalid_input", "A Finance input object is required.");
-  }
-  if (Object.keys(value).some((field) => !fields.includes(field))) {
-    throw new ApiError(400, "unknown_field", "The request contains an unsupported field.");
-  }
-  return value as Record<string, unknown>;
-}
+export const listTransactionsInput = z.object({
+  workspace_id: uuid.optional(),
+  from: date.optional(),
+  to: date.optional(),
+  account_id: uuid.optional(),
+  category_id: uuid.optional(),
+  payee_id: uuid.optional(),
+  project_id: uuid.optional(),
+  kind: transactionKind.optional(),
+  search: z.string().trim().min(1).max(100).optional().describe("Matches payee or notes."),
+  include_deleted: z.boolean().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  cursor: z.string().max(200).optional(),
+}).strict();
 
-function uuid(value: unknown, field: string): string {
-  if (!isUuid(value)) {
-    throw new ApiError(
-      400,
-      field === "request_id" ? "invalid_request_id" : "invalid_input",
-      `${field} must be a valid UUID.`,
-    );
-  }
-  return value.toLowerCase();
-}
+export const getSummaryInput = z.object({
+  workspace_id: uuid.optional(),
+  from: date.optional().describe("Defaults to the first day of the current month."),
+  to: date.optional().describe("Defaults to today."),
+  group_by: z.enum(["category", "payee", "project", "account", "month"]).optional(),
+}).strict();
 
-function nullableUuid(value: unknown, field: string): string | null {
-  return value === null ? null : uuid(value, field);
-}
+export type GetContextInput = z.infer<typeof getContextInput>;
+export type ManageWorkspaceInput = z.infer<typeof manageWorkspaceInput>;
+export type ManageAccountInput = z.infer<typeof manageAccountInput>;
+export type ManageCategoryInput = z.infer<typeof manageCategoryInput>;
+export type ManagePayeeInput = z.infer<typeof managePayeeInput>;
+export type ManageProjectInput = z.infer<typeof manageProjectInput>;
+export type RecordTransactionInput = z.infer<typeof recordTransactionInput>;
+export type UpdateTransactionInput = z.infer<typeof updateTransactionInput>;
+export type ListTransactionsInput = z.infer<typeof listTransactionsInput>;
+export type GetSummaryInput = z.infer<typeof getSummaryInput>;
 
-function text(value: unknown, field: string, maxLength: number): string {
-  if (typeof value !== "string") {
-    throw new ApiError(400, "invalid_input", `${field} must be a nonempty string.`);
-  }
-  const normalized = value.trim();
-  if (
-    !normalized || !normalized.isWellFormed() || normalized.includes("\0") ||
-    Array.from(normalized).length > maxLength
-  ) {
-    throw new ApiError(
-      400,
-      "invalid_input",
-      `${field} must contain between 1 and ${maxLength} characters.`,
-    );
-  }
-  return normalized;
-}
+export const FINANCE_TOOLS = {
+  get_context: {
+    title: "Get context",
+    readOnly: true,
+    input: getContextInput,
+    description:
+      "Start here. Returns your workspaces and, for the chosen or default workspace: today's date, " +
+      "accounts with balances, categories, payees and active projects with budget progress. " +
+      "Use these lists as quick choices. setup_required means no workspace exists yet.",
+  },
+  manage_workspace: {
+    title: "Manage workspace",
+    readOnly: false,
+    input: manageWorkspaceInput,
+    description:
+      "Create, rename, change currency/time zone, set as default, or archive a workspace. " +
+      "Each workspace is independent. The first one becomes the default.",
+  },
+  manage_account: {
+    title: "Manage account",
+    readOnly: false,
+    input: manageAccountInput,
+    description:
+      "Create, rename, update kind/opening balance, set default, archive, or move an account to " +
+      "another workspace together with all its transactions.",
+  },
+  manage_category: {
+    title: "Manage category",
+    readOnly: false,
+    input: manageCategoryInput,
+    description: "Create, rename, regroup or archive an income or expense category.",
+  },
+  manage_payee: {
+    title: "Manage payee",
+    readOnly: false,
+    input: managePayeeInput,
+    description:
+      "Create, rename, set default category, archive, or merge a duplicate payee into another.",
+  },
+  manage_project: {
+    title: "Manage project",
+    readOnly: false,
+    input: manageProjectInput,
+    description:
+      "Create, update (name, budget, dates, notes), close or reopen a project. Spent and remaining " +
+      "are computed from its transactions.",
+  },
+  record_transaction: {
+    title: "Record transaction",
+    readOnly: false,
+    input: recordTransactionInput,
+    description:
+      "Record an income, expense or transfer. Defaults: default workspace, default account, today, " +
+      "and the payee's default category. A transfer needs to_account_id in the same currency.",
+  },
+  update_transaction: {
+    title: "Update transaction",
+    readOnly: false,
+    input: updateTransactionInput,
+    description:
+      "Edit any field, delete (restorable), restore, or move a transaction to another workspace. " +
+      "Moving matches category and payee by name in the target and clears the project.",
+  },
+  list_transactions: {
+    title: "List transactions",
+    readOnly: true,
+    input: listTransactionsInput,
+    description: "List transactions newest first with optional filters. Follow next_cursor.",
+  },
+  get_summary: {
+    title: "Get summary",
+    readOnly: true,
+    input: getSummaryInput,
+    description:
+      "Totals of income, expense and net for a period, optionally grouped by category, payee, " +
+      "project, account or month. Defaults to the current month.",
+  },
+} as const;
 
-export function supportedCurrency(code: unknown): number {
-  if (
-    typeof code !== "string" || !/^[A-Z]{3}$/.test(code) ||
-    !Object.hasOwn(CURRENCY_MINOR_UNITS, code)
-  ) {
-    throw new ApiError(400, "invalid_currency", "A supported uppercase currency code is required.");
-  }
-  return CURRENCY_MINOR_UNITS[code];
-}
-
-function currency(value: unknown): string {
-  supportedCurrency(value);
-  return value as string;
-}
-
-export function normalizeMoney(value: unknown, minorUnit: number, positive: boolean): string {
-  if (!Number.isInteger(minorUnit) || minorUnit < 0 || minorUnit > 4) {
-    throw new ApiError(
-      400,
-      "invalid_currency",
-      "Currency precision must be between zero and four.",
-    );
-  }
-  const match = typeof value === "string" ? /^(-?)(\d+)(?:\.(\d+))?$/.exec(value) : null;
-  if (!match || (positive && match[1] === "-")) {
-    throw new ApiError(400, "invalid_amount", "A valid plain decimal string is required.");
-  }
-  const integer = match[2].replace(/^0+(?=\d)/, "");
-  const fraction = match[3] ?? "";
-  const nonzero = /[1-9]/.test(integer + fraction);
-  // Check the raw fraction before padding or stripping zeros; precision must never be rounded away.
-  if (integer.length > 16 || fraction.length > minorUnit || (positive && !nonzero)) {
-    throw new ApiError(
-      400,
-      "invalid_amount",
-      "The amount exceeds its allowed precision or range, or must be positive.",
-    );
-  }
-  return `${match[1] && nonzero ? "-" : ""}${integer}${
-    minorUnit === 0 ? "" : "." + fraction.padEnd(minorUnit, "0")
-  }`;
-}
-
-function rawMoney(value: unknown, positive: boolean): string {
-  normalizeMoney(value, 4, positive);
-  // Stored book precision is authoritative and must validate the original spelling before hashing.
-  return value as string;
-}
-
-export function validateDate(value: unknown): string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new ApiError(400, "invalid_date", "A real date in YYYY-MM-DD form is required.");
-  }
-  const [year, month, day] = value.split("-").map(Number);
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (year === 0 || month < 1 || month > 12 || day < 1 || day > monthDays[month - 1]) {
-    throw new ApiError(400, "invalid_date", "A real date in YYYY-MM-DD form is required.");
-  }
-  return value;
-}
-
-export function workspaceLocalDate(timezone: string, now: Date = new Date()): string {
-  if (!Number.isFinite(now.getTime())) {
-    throw new ApiError(400, "invalid_date", "A valid date instant is required.");
-  }
-  let formatter: Intl.DateTimeFormat;
-  try {
-    if (/^[+-]/.test(timezone)) throw new Error();
-    formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      calendar: "gregory",
-      numberingSystem: "latn",
-      era: "short",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-  } catch {
-    throw new ApiError(400, "invalid_timezone", "A valid IANA time zone is required.");
-  }
-  const parts = formatter.formatToParts(now);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)!.value;
-  if (part("era") !== "AD") {
-    throw new ApiError(400, "invalid_date", "The local date must be in years 0001 through 9999.");
-  }
-  return validateDate(`${part("year").padStart(4, "0")}-${part("month")}-${part("day")}`);
-}
-
-export function validateFinanceContextInput(value: unknown): FinanceContextInput {
-  const body = closedObject(value, ["workspace_id", "book_id", "cursor"]);
-  const result: FinanceContextInput = {
-    workspace_id: uuid(body.workspace_id, "workspace_id"),
-    ...(Object.hasOwn(body, "book_id") ? { book_id: uuid(body.book_id, "book_id") } : {}),
-  };
-  if (!Object.hasOwn(body, "cursor")) return result;
-  if (
-    typeof body.cursor !== "string" || body.cursor.length < 1 || body.cursor.length > 1024 ||
-    body.cursor.includes("\0") || !body.cursor.isWellFormed()
-  ) {
-    throw new ApiError(400, "invalid_cursor", "A valid bounded continuation cursor is required.");
-  }
-  return { ...result, cursor: body.cursor };
-}
-
-export function validateCreateBookInput(value: unknown): CreateBookInput {
-  const body = closedObject(value, ["request_id", "workspace_id", "name", "currency"]);
-  return {
-    request_id: uuid(body.request_id, "request_id"),
-    workspace_id: uuid(body.workspace_id, "workspace_id"),
-    name: text(body.name, "name", 200),
-    currency: currency(body.currency),
-  };
-}
-
-export function validateCreateAccountInput(value: unknown): CreateAccountInput {
-  const body = closedObject(value, [
-    "request_id",
-    "workspace_id",
-    "book_id",
-    "name",
-    "currency",
-    "opening_balance",
-    "person_id",
-  ]);
-  return {
-    request_id: uuid(body.request_id, "request_id"),
-    workspace_id: uuid(body.workspace_id, "workspace_id"),
-    book_id: uuid(body.book_id, "book_id"),
-    name: text(body.name, "name", 200),
-    currency: currency(body.currency),
-    opening_balance: rawMoney(body.opening_balance, false),
-    person_id: nullableUuid(body.person_id, "person_id"),
-  };
-}
-
-export function validateRecordExpenseInput(value: unknown): RecordExpenseInput {
-  const body = closedObject(value, [
-    "request_id",
-    "workspace_id",
-    "book_id",
-    "source_account_id",
-    "amount",
-    "currency",
-    "occurred_on",
-    "description",
-    "beneficiary_person_id",
-  ]);
-  return {
-    request_id: uuid(body.request_id, "request_id"),
-    workspace_id: uuid(body.workspace_id, "workspace_id"),
-    book_id: uuid(body.book_id, "book_id"),
-    source_account_id: uuid(body.source_account_id, "source_account_id"),
-    amount: rawMoney(body.amount, true),
-    currency: currency(body.currency),
-    occurred_on: validateDate(body.occurred_on),
-    description: text(body.description, "description", 2000),
-    beneficiary_person_id: nullableUuid(body.beneficiary_person_id, "beneficiary_person_id"),
-  };
-}
+export type FinanceToolName = keyof typeof FINANCE_TOOLS;

@@ -1,6 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import type { VerifiedIdentity } from "../_shared/auth.ts";
-import { createDatabase, sessionIsActive, withWorkspaceTransaction } from "../_shared/database.ts";
+import { createDatabase, sessionIsActive } from "../_shared/database.ts";
+import { runFinanceTool } from "../_shared/finance.ts";
+import type { FinanceToolName } from "../_shared/finance_contracts.ts";
 import { ApiError } from "../_shared/http.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -17,13 +19,17 @@ function localEnvironment() {
   const api = new URL(requiredEnvironment("SUPABASE_URL"));
   const databaseUrl = requiredEnvironment("SUPABASE_DB_URL");
   const database = new URL(databaseUrl);
+  const backendUrl = requiredEnvironment("IMPULSO_TEST_DATABASE_URL");
+  const backend = new URL(backendUrl);
   const loopback = ["127.0.0.1", "localhost"];
   assert(
     api.protocol === "http:" && loopback.includes(api.hostname) && api.port === "54321" &&
       api.username === "" && api.password === "" && api.pathname === "/" &&
       api.search === "" && api.hash === "" &&
       ["postgres:", "postgresql:"].includes(database.protocol) &&
-      loopback.includes(database.hostname) && database.port === "54322",
+      loopback.includes(database.hostname) && database.port === "54322" &&
+      backend.username === "impulso_backend" && loopback.includes(backend.hostname) &&
+      backend.port === "54322",
     "Integration fixtures may only be created in the local Impulso stack.",
   );
   assert(
@@ -33,17 +39,10 @@ function localEnvironment() {
   return {
     apiUrl: api.origin,
     databaseUrl,
+    backendUrl,
     anonymousKey: requiredEnvironment("SUPABASE_ANON_KEY"),
     serviceKey: requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY"),
   };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((complete) => {
-    resolve = complete;
-  });
-  return { promise, resolve };
 }
 
 async function expectStatus(
@@ -71,7 +70,7 @@ function sessionIdentifier(token: string): string {
   return claims.session_id;
 }
 
-Deno.test("Local Edge API verifies identity and protects PostgreSQL transactions", async (test) => {
+Deno.test("Local Edge API verifies identity and runs the Finance service", async (test) => {
   // Validate both destinations before constructing privileged clients or creating fixtures.
   const environment = localEnvironment();
   const options = {
@@ -80,12 +79,7 @@ Deno.test("Local Edge API verifies identity and protects PostgreSQL transactions
   const admin = createClient(environment.apiUrl, environment.serviceKey, options);
   const client = createClient(environment.apiUrl, environment.anonymousKey, options);
   const database = createDatabase(environment.databaseUrl);
-  const blocker = createDatabase(environment.databaseUrl);
-  const observer = createDatabase(environment.databaseUrl);
-  const workspaceId = crypto.randomUUID();
-  const otherWorkspaceId = crypto.randomUUID();
-  const personId = crypto.randomUUID();
-  const fixtureName = `Edge integration ${crypto.randomUUID()}`;
+  const backend = createDatabase(environment.backendUrl);
   const email = `edge-${crypto.randomUUID()}@impulso.test.invalid`;
   const password = `${crypto.randomUUID()}aA1!`;
   let userId: string | undefined;
@@ -138,21 +132,6 @@ Deno.test("Local Edge API verifies identity and protects PostgreSQL transactions
     };
     const headers = { Authorization: `Bearer ${token}` };
 
-    await database.begin(async (sql) => {
-      await sql`
-        INSERT INTO core.workspaces (id, name, timezone, created_by_user_id)
-        VALUES (${workspaceId}, ${fixtureName}, 'UTC', ${fixtureUserId})
-      `;
-      await sql`
-        INSERT INTO core.workspaces (id, name, timezone)
-        VALUES (${otherWorkspaceId}, ${`${fixtureName} without access`}, 'UTC')
-      `;
-      await sql`
-        INSERT INTO core.workspace_members (workspace_id, user_id, role, status, accepted_at)
-        VALUES (${workspaceId}, ${fixtureUserId}, 'owner', 'active', now())
-      `;
-    });
-
     await test.step("A real user session supplies identity and rejects client actor fields", async () => {
       const result = await expectStatus(environment.apiUrl, "/session", 200, { headers }) as {
         user?: { id?: unknown; email?: unknown };
@@ -186,108 +165,273 @@ Deno.test("Local Edge API verifies identity and protects PostgreSQL transactions
       );
     });
 
-    await test.step("An inaccessible workspace never executes a business callback", async () => {
-      let executed = false;
+    // deno-lint-ignore no-explicit-any
+    type Result = Record<string, any>;
+    const call = async (name: FinanceToolName, input: Record<string, unknown>): Promise<Result> =>
+      await runFinanceTool(backend, identity, name, input);
+    const expectError = async (
+      name: FinanceToolName,
+      input: Record<string, unknown>,
+      code: string,
+    ) => {
       try {
-        await withWorkspaceTransaction(database, identity, otherWorkspaceId, () => {
-          executed = true;
-          return Promise.resolve();
-        });
-        throw new Error("An inaccessible workspace unexpectedly accepted an operation.");
+        await call(name, input);
       } catch (error) {
-        assert(
-          error instanceof ApiError && error.status === 403 &&
-            error.code === "workspace_access_denied",
-          "An inaccessible workspace must produce an authorization error.",
-        );
+        assert(error instanceof ApiError && error.code === code, `${name} must fail with ${code}.`);
+        return;
       }
-      assert(!executed, "Authorization must precede execution of a business callback.");
+      throw new Error(`${name} unexpectedly succeeded; expected ${code}.`);
+    };
+
+    await test.step("The backend role edits app tables but can never delete rows", async () => {
+      const [privileges] = await database<{ can_delete: boolean; can_update: boolean }[]>`
+        SELECT has_table_privilege('impulso_backend', 'app.transactions', 'DELETE') AS can_delete,
+          has_table_privilege('impulso_backend', 'app.transactions', 'UPDATE') AS can_update`;
+      assert(
+        privileges.can_update && !privileges.can_delete,
+        "Transactions must be editable and never hard-deleted.",
+      );
     });
 
-    await test.step("A failed operation rolls back rows and leaves the connection usable", async () => {
-      const failure = new Error("Intentional integration rollback");
-      try {
-        await withWorkspaceTransaction(database, identity, workspaceId, async (sql, access) => {
-          assert(
-            access.workspace_id === workspaceId && access.member_role === "owner",
-            "The workspace context must come from the active database membership.",
-          );
-          await sql`
-            INSERT INTO core.people (id, workspace_id, display_name, created_by_user_id)
-            VALUES (${personId}, ${workspaceId}, 'Rollback fixture', ${identity.user_id})
-          `;
-          throw failure;
-        });
-        throw new Error("A deliberately failing operation unexpectedly completed.");
-      } catch (error) {
-        assert(error === failure, "The transaction must propagate its callback failure.");
-      }
-      const rows = await database`SELECT id FROM core.people WHERE id = ${personId}`;
-      assert(rows.length === 0, "No row from a failed operation may remain committed.");
-      assert(await sessionIsActive(database, identity), "The connection must work after rollback.");
-    });
-
-    await test.step("A waiting operation checks membership after the workspace lock", async () => {
-      const [backend] = await database<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-      const locked = deferred();
-      const release = deferred();
-      let lockReady = false;
-      let callbackExecuted = false;
-      const blockingOperation = blocker.begin(async (sql) => {
-        await sql`SELECT id FROM core.workspaces WHERE id = ${workspaceId} FOR UPDATE`;
-        lockReady = true;
-        locked.resolve();
-        await release.promise;
-        await sql`
-          UPDATE core.workspace_members SET status = 'revoked', revoked_at = now()
-          WHERE workspace_id = ${workspaceId} AND user_id = ${identity.user_id}
-        `;
+    await test.step("A new user sets up workspaces, accounts, categories and payees", async () => {
+      assert((await call("get_context", {})).setup_required === true, "Setup must be required.");
+      await expectError("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "1",
+      }, "setup_required");
+      await expectError("manage_workspace", {
+        action: "create",
+        name: "Yo",
+        currency: "MXN",
+        timezone: "Mars/Olympus",
+      }, "invalid_timezone");
+      const yo = await call("manage_workspace", {
+        action: "create",
+        name: "Yo",
+        currency: "MXN",
+        timezone: "America/Mexico_City",
       });
-      let waitingOperation: Promise<{ error: unknown }> | undefined;
-      try {
-        await Promise.race([
-          locked.promise,
-          blockingOperation.then(() => {
-            assert(lockReady, "The blocking transaction must acquire its workspace lock.");
-          }),
-        ]);
-        waitingOperation = withWorkspaceTransaction(database, identity, workspaceId, () => {
-          callbackExecuted = true;
-          return Promise.resolve();
-        }).then(() => ({ error: null }), (error: unknown) => ({ error }));
-        let waitingOnLock = false;
-        const deadline = Date.now() + 1_500;
-        while (Date.now() < deadline) {
-          const [activity] = await observer<{ wait_event_type: string | null }[]>`
-            SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${backend.pid}
-          `;
-          if (activity?.wait_event_type === "Lock") {
-            waitingOnLock = true;
-            break;
-          }
-          await new Promise((complete) => setTimeout(complete, 25));
-        }
-        assert(waitingOnLock, "The concurrent operation must wait on the existing workspace lock.");
-        assert(
-          !callbackExecuted,
-          "No callback may execute while its workspace lock is unavailable.",
-        );
-        release.resolve();
-        await blockingOperation;
-        const outcome = await waitingOperation;
-        assert(
-          outcome.error instanceof ApiError && outcome.error.status === 403 &&
-            outcome.error.code === "workspace_access_denied",
-          "Fresh membership must reject an operation after the locked revocation commits.",
-        );
-        assert(!callbackExecuted, "A revoked membership must never reach the business callback.");
-      } finally {
-        release.resolve();
-        await Promise.allSettled([
-          blockingOperation,
-          ...(waitingOperation ? [waitingOperation] : []),
-        ]);
-      }
+      assert(yo.workspace.is_default === true, "The first workspace must become the default.");
+      const mama = await call("manage_workspace", {
+        action: "create",
+        name: "Mamá",
+        currency: "MXN",
+        timezone: "America/Mexico_City",
+      });
+      assert(mama.workspace.is_default === false, "Later workspaces are not default.");
+      await expectError("manage_workspace", {
+        action: "create",
+        name: "yo",
+        currency: "MXN",
+        timezone: "UTC",
+      }, "name_taken");
+      const bbva = await call("manage_account", { action: "create", name: "BBVA" });
+      assert(
+        bbva.account.is_default === true && bbva.account.currency === "MXN",
+        "The first account must become the default in the workspace currency.",
+      );
+      await call("manage_account", { action: "create", name: "Efectivo", kind: "cash" });
+      await call("manage_account", {
+        action: "update",
+        account_id: bbva.account.id,
+        name: "BBVA Débito",
+      });
+      const food = await call("manage_category", {
+        action: "create",
+        name: "Comida",
+        kind: "expense",
+        group: "Hogar",
+      });
+      await call("manage_payee", {
+        action: "create",
+        name: "Oxxo",
+        default_category_id: food.category.id,
+      });
+      const context = await call("get_context", {});
+      assert(
+        context.workspace.name === "Yo" && context.accounts.length === 2 &&
+          context.accounts[0].name === "BBVA Débito" && context.payees.length === 1,
+        "Context must list the renamed default account first and the payee.",
+      );
+    });
+
+    await test.step("Transactions use defaults, retry safely and keep balances", async () => {
+      const context = await call("get_context", {});
+      const [bbva, cash] = context.accounts;
+      const expense = {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "200.50",
+        payee: "oxxo",
+        date: "2026-11-01",
+      };
+      const first = await call("record_transaction", expense);
+      const retry = await call("record_transaction", expense);
+      assert(
+        first.status === "created" && retry.status === "already_processed" &&
+          first.transaction.id === retry.transaction.id,
+        "A retry with the same request_id must not duplicate the expense.",
+      );
+      assert(
+        first.transaction.category === "Comida" && first.transaction.payee === "Oxxo" &&
+          first.transaction.account === "BBVA Débito" && first.account_balance === "-200.50",
+        "The payee default category and default account must apply.",
+      );
+      const transfer = await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "transfer",
+        amount: "1000",
+        to_account_id: cash.id,
+        date: "2026-11-02",
+      });
+      assert(transfer.account_balance === "-1200.50", "A transfer must leave the source account.");
+      await expectError("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "transfer",
+        amount: "5",
+        to_account_id: bbva.id,
+        account_id: bbva.id,
+      }, "same_account");
+      const edited = await call("update_transaction", {
+        action: "edit",
+        transaction_id: first.transaction.id,
+        amount: "180",
+        notes: "Snacks",
+      });
+      assert(edited.transaction.amount === "180.00", "Editing must change the amount.");
+      await call("update_transaction", { action: "delete", transaction_id: first.transaction.id });
+      const afterDelete = await call("get_context", {});
+      assert(afterDelete.accounts[0].balance === "-1000.00", "Deleted rows leave balances.");
+      await call("update_transaction", { action: "restore", transaction_id: first.transaction.id });
+      const listed = await call("list_transactions", { search: "snack" });
+      assert(listed.transactions.length === 1, "Search must match notes.");
+      const summary = await call("get_summary", {
+        from: "2026-11-01",
+        to: "2026-11-30",
+        group_by: "category",
+      });
+      assert(
+        summary.totals[0].expense === "180.00" && summary.groups[0].key === "Comida",
+        "The summary must exclude transfers and group by category.",
+      );
+    });
+
+    await test.step("Projects track spending against their budget", async () => {
+      const project = await call("manage_project", {
+        action: "create",
+        name: "Viaje Japón",
+        budget: "1000",
+      });
+      await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "300",
+        payee: "Aeroméxico",
+        project_id: project.project.id,
+      });
+      const context = await call("get_context", {});
+      const progress = context.projects.find((row: { id: string }) =>
+        row.id === project.project.id
+      );
+      assert(
+        progress.spent === "300.00" && progress.remaining === "700.00",
+        "Project spent and remaining must come from its transactions.",
+      );
+      await call("manage_project", { action: "close", project_id: project.project.id });
+      await expectError("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "1",
+        project_id: project.project.id,
+      }, "project_closed");
+    });
+
+    await test.step("Guards keep debts negative, currencies stable and archives idempotent", async () => {
+      await expectError("manage_account", {
+        action: "create",
+        name: "Tarjeta Nu",
+        kind: "credit_card",
+        opening_balance: "5000",
+      }, "debt_must_be_negative");
+      const card = await call("manage_account", {
+        action: "create",
+        name: "Tarjeta Nu",
+        kind: "credit_card",
+        opening_balance: "-5000",
+      });
+      assert(card.account.balance === "-5000.00", "A card debt starts as a negative balance.");
+      const context = await call("get_context", {});
+      await expectError("manage_workspace", {
+        action: "update",
+        workspace_id: context.workspace.id,
+        currency: "USD",
+      }, "workspace_in_use");
+      const first = await call("manage_account", {
+        action: "archive",
+        account_id: card.account.id,
+      });
+      const again = await call("manage_account", {
+        action: "archive",
+        account_id: card.account.id,
+      });
+      assert(
+        first.status === "archived" && again.status === "already_archived",
+        "Archiving twice must report the account as already archived.",
+      );
+      const recorded = await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "12",
+        payee: "Uber",
+      });
+      assert(!("deleted" in recorded.transaction), "Active transactions omit the deleted flag.");
+    });
+
+    await test.step("Transactions and accounts move between independent workspaces", async () => {
+      const context = await call("get_context", {});
+      const mama = context.workspaces.find((row: { name: string }) => row.name === "Mamá");
+      const mamaAccount = await call("manage_account", {
+        action: "create",
+        workspace_id: mama.id,
+        name: "Banorte de mamá",
+      });
+      const { transactions } = await call("list_transactions", { search: "snack" });
+      const moved = await call("update_transaction", {
+        action: "move",
+        transaction_id: transactions[0].id,
+        to_workspace_id: mama.id,
+      });
+      assert(
+        moved.transaction.workspace === "Mamá" && moved.transaction.category === "Comida" &&
+          moved.transaction.account === "Banorte de mamá" && moved.transaction.payee === "Oxxo",
+        "A moved transaction must reuse or create matching category and payee names.",
+      );
+      const savings = await call("manage_account", { action: "create", name: "Ahorro" });
+      await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "income",
+        amount: "50",
+        account_id: savings.account.id,
+      });
+      const movedAccount = await call("manage_account", {
+        action: "move",
+        account_id: savings.account.id,
+        to_workspace_id: mama.id,
+      });
+      assert(movedAccount.transactions_moved === 1, "An account moves with its transactions.");
+      await expectError("manage_account", {
+        action: "move",
+        account_id: context.accounts[1].id,
+        to_workspace_id: mama.id,
+      }, "account_has_transfers");
+      const mamaContext = await call("get_context", { workspace_id: mama.id });
+      assert(
+        mamaContext.accounts.length === 2 &&
+          mamaContext.accounts[0].id === mamaAccount.account.id,
+        "The target keeps its default account and gains the moved one.",
+      );
+      await expectError("get_context", { workspace_id: crypto.randomUUID() }, "not_found");
     });
 
     await test.step("Signing out invalidates reuse of the same access token", async () => {
@@ -299,16 +443,18 @@ Deno.test("Local Edge API verifies identity and protects PostgreSQL transactions
   } finally {
     const cleanupFailures: string[] = [];
     try {
-      await database.begin(async (sql) => {
-        await sql`
-          DELETE FROM core.people WHERE workspace_id IN (${workspaceId}, ${otherWorkspaceId})
-        `;
-        await sql`
-          DELETE FROM core.workspace_members
-          WHERE workspace_id IN (${workspaceId}, ${otherWorkspaceId})
-        `;
-        await sql`DELETE FROM core.workspaces WHERE id IN (${workspaceId}, ${otherWorkspaceId})`;
-      });
+      const ownerId = userId;
+      if (ownerId) {
+        await database.begin(async (sql) => {
+          const owned = sql`SELECT id FROM app.workspaces WHERE owner_user_id = ${ownerId}`;
+          await sql`DELETE FROM app.transactions WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.payees WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.projects WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.categories WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.accounts WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.workspaces WHERE owner_user_id = ${ownerId}`;
+        });
+      }
     } catch {
       cleanupFailures.push("local workspace fixtures");
     }
@@ -324,8 +470,7 @@ Deno.test("Local Edge API verifies identity and protects PostgreSQL transactions
     await admin.auth.stopAutoRefresh();
     const connections = await Promise.allSettled([
       database.end({ timeout: 5 }),
-      blocker.end({ timeout: 5 }),
-      observer.end({ timeout: 5 }),
+      backend.end({ timeout: 5 }),
     ]);
     if (connections.some((connection) => connection.status === "rejected")) {
       cleanupFailures.push("local database connections");

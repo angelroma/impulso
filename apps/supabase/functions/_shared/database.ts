@@ -106,37 +106,3 @@ export async function withIdentityTransaction<T>(
     throw error;
   }
 }
-
-export interface WorkspaceAccess {
-  readonly workspace_id: string;
-  readonly member_role: "owner" | "member";
-}
-
-export function withWorkspaceTransaction<T>(
-  database: Database,
-  identity: VerifiedIdentity,
-  workspaceId: string,
-  operation: (sql: Transaction, access: WorkspaceAccess) => Promise<T>,
-): Promise<T> {
-  if (!isUuid(workspaceId)) {
-    throw new ApiError(400, "invalid_workspace_id", "A valid workspace identifier is required.");
-  }
-  return withIdentityTransaction(database, identity, async (sql) => {
-    const [workspace] = await sql<{ archived_at: Date | null }[]>`
-      SELECT archived_at FROM core.workspaces WHERE id = ${workspaceId} FOR UPDATE
-    `;
-    const [membership] = await sql<{ role: "owner" | "member" }[]>`
-      SELECT role FROM core.workspace_members
-      WHERE workspace_id = ${workspaceId} AND user_id = ${identity.user_id} AND status = 'active'
-      FOR SHARE
-    `;
-    if (!workspace || !membership) {
-      throw new ApiError(403, "workspace_access_denied", "Access to this workspace is denied.");
-    }
-    if (workspace.archived_at !== null) {
-      throw new ApiError(409, "workspace_archived", "This workspace is archived.");
-    }
-    // Membership is only the first gate; domain operations must check their own grants.
-    return await operation(sql, { workspace_id: workspaceId, member_role: membership.role });
-  }) as Promise<T>;
-}

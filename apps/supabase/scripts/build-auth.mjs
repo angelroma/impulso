@@ -1,39 +1,117 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
+// Builds the sign-in and consent page in two forms from one template:
+//   node build-auth.mjs          -> functions/impulso-auth/_generated/assets.ts (local Edge Function)
+//   node build-auth.mjs static   -> dist/apps/impulso-auth (static host such as Cloudflare Pages)
+// The static build reads IMPULSO_AUTH_API_URL and IMPULSO_AUTH_PUBLIC_KEY from the environment.
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 
-const functionRoot = new URL('../functions/impulso-auth/', import.meta.url);
-const browserRoot = new URL('browser/', functionRoot);
-const workspaceRoot = fileURLToPath(new URL('../../../', import.meta.url));
-export async function buildAuthorizationAssets() {
+const functionRoot = new URL("../functions/impulso-auth/", import.meta.url);
+const browserRoot = new URL("browser/", functionRoot);
+const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+
+export const LOCAL_BASE_PATH = "/functions/v1/impulso-auth";
+export const LOCAL_MCP_URL = "http://127.0.0.1:54321/functions/v1/impulso-api/mcp";
+
+/** Fills every {{NAME}} placeholder and fails if one is missing or left over. */
+export function renderPage(template, values) {
+  const html = template.replace(/\{\{([A-Z_]+)\}\}/g, (_match, name) => {
+    if (!(name in values)) throw new Error(`The page template needs a value for ${name}.`);
+    return values[name];
+  });
+  return html;
+}
+
+export async function buildAuthorizationAssets({ basePath, mcpUrl }) {
   const bundle = await build({
-    entryPoints: [fileURLToPath(new URL('client.js', browserRoot))],
+    entryPoints: [fileURLToPath(new URL("client.js", browserRoot))],
     absWorkingDir: workspaceRoot,
     bundle: true,
     write: false,
-    platform: 'browser',
-    format: 'esm',
-    target: 'es2022',
+    platform: "browser",
+    format: "esm",
+    target: "es2022",
     minify: true,
   });
-  const [html, styles] = await Promise.all([
-    readFile(new URL('index.html', browserRoot), 'utf8'),
-    readFile(new URL('styles.css', browserRoot), 'utf8'),
+  const [template, styles] = await Promise.all([
+    readFile(new URL("index.html", browserRoot), "utf8"),
+    readFile(new URL("styles.css", browserRoot), "utf8"),
   ]);
+  const html = renderPage(template, { BASE_PATH: basePath, MCP_URL: mcpUrl });
   return { html, script: bundle.outputFiles[0].text, styles };
 }
 
+/** Accepts only an HTTPS Supabase API origin and a publishable (never secret) key. */
+export function staticConfiguration(environment) {
+  let url;
+  try {
+    url = new URL(environment.IMPULSO_AUTH_API_URL);
+  } catch {
+    url = undefined;
+  }
+  if (
+    !url || url.protocol !== "https:" || url.origin !== environment.IMPULSO_AUTH_API_URL
+  ) {
+    throw new Error("IMPULSO_AUTH_API_URL must be the HTTPS Supabase API origin.");
+  }
+  const publicKey = environment.IMPULSO_AUTH_PUBLIC_KEY;
+  if (typeof publicKey !== "string" || !/^sb_publishable_[A-Za-z0-9_-]+$/.test(publicKey)) {
+    throw new Error("IMPULSO_AUTH_PUBLIC_KEY must be a Supabase publishable key.");
+  }
+  return { api_url: url.origin, public_key: publicKey };
+}
+
+export async function buildStaticSite(outputRoot, environment) {
+  const configuration = staticConfiguration(environment);
+  const assets = await buildAuthorizationAssets({
+    basePath: "",
+    mcpUrl: `${configuration.api_url}/functions/v1/impulso-api/mcp`,
+  });
+  const headers = [
+    "/*",
+    "  Cache-Control: no-store",
+    "  X-Content-Type-Options: nosniff",
+    "  Referrer-Policy: no-referrer",
+    "  X-Frame-Options: DENY",
+    `  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ${configuration.api_url}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+    "",
+  ].join("\n");
+  const files = new Map([
+    ["index.html", assets.html],
+    ["oauth/consent/index.html", assets.html],
+    ["auth/callback/index.html", assets.html],
+    ["auth.js", assets.script],
+    ["styles.css", assets.styles],
+    ["config.json", `${JSON.stringify(configuration, null, 2)}\n`],
+    ["_headers", headers],
+    ["_redirects", "/oauth/consent /index.html 200\n/auth/callback /index.html 200\n"],
+  ]);
+  for (const [name, content] of files) {
+    const destination = join(outputRoot, name);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, content, "utf8");
+  }
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const authorizationAssets = await buildAuthorizationAssets();
-  const generatedRoot = new URL('_generated/', functionRoot);
-  await mkdir(generatedRoot, { recursive: true });
-  await writeFile(
-    new URL('assets.ts', generatedRoot),
-    '// Generated by build-auth.mjs. Runtime configuration is provided separately.\n' +
-      `export const authorizationAssets = ${JSON.stringify(authorizationAssets)} as const;\n`,
-    'utf8',
-  );
-  console.log(
-    'Built the authorization browser assets for the Impulso Edge Function.',
-  );
+  if (process.argv[2] === "static") {
+    const outputRoot = fileURLToPath(new URL("../../../dist/apps/impulso-auth/", import.meta.url));
+    await buildStaticSite(outputRoot, process.env);
+    console.log("Built the static sign-in site in dist/apps/impulso-auth.");
+  } else {
+    const assets = await buildAuthorizationAssets({
+      basePath: LOCAL_BASE_PATH,
+      mcpUrl: LOCAL_MCP_URL,
+    });
+    const generatedRoot = new URL("_generated/", functionRoot);
+    await mkdir(generatedRoot, { recursive: true });
+    await writeFile(
+      new URL("assets.ts", generatedRoot),
+      "// Generated by scripts/build-auth.mjs. Do not edit.\n" +
+        `export const authorizationAssets = ${JSON.stringify(assets)} as const;\n`,
+      "utf8",
+    );
+    console.log("Built the sign-in assets for the local impulso-auth Edge Function.");
+  }
 }

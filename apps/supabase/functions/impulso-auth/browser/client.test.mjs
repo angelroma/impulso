@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { renderPage } from '../../../scripts/build-auth.mjs';
 
 const source = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
   .replace(/^import .*?;\r?\n/, '')
   .replace('\ninitialize().catch(', '\nglobalThis.ready = initialize().catch(');
-const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
-const requestId = '8cf62009-29bc-432b-9f57-0bb0a4c25a3e';
 const authorizationBasePath = '/functions/v1/impulso-auth';
+const html = renderPage(readFileSync(new URL('./index.html', import.meta.url), 'utf8'), {
+  BASE_PATH: authorizationBasePath,
+  MCP_URL: 'http://127.0.0.1:54321/functions/v1/impulso-api/mcp',
+});
+const requestId = '8cf62009-29bc-432b-9f57-0bb0a4c25a3e';
 const authorizationBaseUrl = `http://127.0.0.1:54321${authorizationBasePath}`;
 const consentUrl = `${authorizationBaseUrl}/oauth/consent?authorization_id=${requestId}`;
 const storageKey = 'impulso-oauth-authorization';

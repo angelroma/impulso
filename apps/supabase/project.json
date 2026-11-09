@@ -5,160 +5,110 @@
   "sourceRoot": "apps/supabase/functions",
   "tags": ["scope:backend", "platform:supabase"],
   "targets": {
-    "test-db": {
+    "start": {
       "executor": "nx:run-commands",
       "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "npx supabase@2.120.0 test db --local --workdir apps"
-      }
+      "options": { "command": "npx supabase start --workdir apps" }
     },
-    "start-local": {
+    "stop": {
       "executor": "nx:run-commands",
       "cache": false,
-      "options": {
-        "command": "npx supabase@2.120.0 start --workdir apps",
-        "envFile": "apps/supabase/.env.local"
-      }
+      "options": { "command": "npx supabase stop --project-id Impulso --workdir apps" }
     },
-    "migrate-local": {
+    "migrate": {
       "executor": "nx:run-commands",
       "cache": false,
-      "options": {
-        "command": "npx supabase@2.120.0 migration up --local --workdir apps",
-        "envFile": "apps/supabase/.env.local"
-      }
+      "options": { "command": "npx supabase migration up --local --workdir apps" }
     },
-    "serve-functions": {
+    "configure-backend": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": { "command": "node apps/supabase/scripts/configure-backend.mjs" }
+    },
+    "serve": {
       "executor": "nx:run-commands",
       "cache": false,
       "dependsOn": ["build-auth"],
       "options": {
-        "command": "npx supabase@2.120.0 functions serve --env-file apps/supabase/functions/.env.local --workdir apps",
-        "envFile": "apps/supabase/.env.local"
+        "command": "npx supabase functions serve --env-file apps/supabase/functions/.env.local --workdir apps"
       }
     },
-    "check-functions": {
+    "build-auth": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["{projectRoot}/functions/impulso-auth/browser/**/*", "{projectRoot}/scripts/build-auth.mjs"],
+      "outputs": ["{projectRoot}/functions/impulso-auth/_generated"],
+      "options": { "command": "node apps/supabase/scripts/build-auth.mjs" }
+    },
+    "build-site": {
       "executor": "nx:run-commands",
       "cache": false,
+      "outputs": ["{workspaceRoot}/dist/apps/impulso-auth"],
+      "options": { "command": "node apps/supabase/scripts/build-auth.mjs static" }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "cache": true,
       "dependsOn": ["build-auth"],
       "options": {
         "command": "npx deno check --config apps/supabase/functions/impulso-api/deno.json apps/supabase/functions/impulso-api/index.ts apps/supabase/functions/impulso-auth/index.ts"
       }
     },
-    "lint-functions": {
+    "lint": {
       "executor": "nx:run-commands",
-      "cache": false,
+      "cache": true,
       "options": {
-        "command": "npx deno lint --no-config --ignore=apps/supabase/functions/impulso-auth/browser,apps/supabase/functions/impulso-auth/_generated apps/supabase/functions"
+        "command": "npx deno lint --no-config --ignore=apps/supabase/functions/impulso-auth/browser,apps/supabase/functions/impulso-auth/_generated apps/supabase/functions apps/supabase/scripts"
       }
     },
-    "test-functions": {
+    "format": {
       "executor": "nx:run-commands",
       "cache": false,
       "options": {
-        "command": "npx deno test --config apps/supabase/functions/impulso-api/deno.json --allow-env apps/supabase/functions/_shared apps/supabase/functions/impulso-api apps/supabase/functions/impulso-auth"
+        "command": "npx deno fmt --no-config --line-width=100 --ignore=apps/supabase/functions/impulso-auth/browser,apps/supabase/functions/impulso-auth/_generated apps/supabase/functions apps/supabase/scripts"
       }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "commands": [
+          "npx deno test --config apps/supabase/functions/impulso-api/deno.json --allow-env apps/supabase/functions/_shared apps/supabase/functions/impulso-api apps/supabase/functions/impulso-auth",
+          "node --test apps/supabase/functions/impulso-auth/browser/client.test.mjs apps/supabase/scripts/build-auth.test.mjs"
+        ],
+        "parallel": false
+      }
+    },
+    "test-db": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": { "command": "npx supabase test db --local --workdir apps" }
     },
     "test-integration": {
       "executor": "nx:run-commands",
       "cache": false,
-      "options": {
-        "command": "node apps/supabase/scripts/run-integration.mjs",
-        "envFile": "apps/supabase/.env.local"
-      }
-    },
-    "format-functions": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "npx deno fmt --no-config --line-width=100 --ignore=apps/supabase/functions/impulso-auth/browser,apps/supabase/functions/impulso-auth/_generated apps/supabase/functions"
-      }
-    },
-    "configure-backend": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "node apps/supabase/scripts/configure-backend.mjs",
-        "envFile": "apps/supabase/.env.local"
-      }
-    },
-    "stop-local": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "npx supabase@2.120.0 stop --project-id Impulso --workdir apps",
-        "envFile": "apps/supabase/.env.local"
-      }
+      "options": { "command": "node apps/supabase/scripts/run-integration.mjs" }
     },
     "verify-schema": {
       "executor": "nx:run-commands",
       "cache": false,
-      "outputs": [],
       "options": {
-        "command": "npx supabase@2.120.0 db schema declarative sync --file verify_impulso_schema --no-apply --workdir apps",
-        "envFile": "apps/supabase/.env.local"
+        "command": "npx supabase db schema declarative sync --file verify_impulso_schema --no-apply --workdir apps"
       }
     },
-    "test-auth": {
+    "push-config": {
       "executor": "nx:run-commands",
       "cache": false,
-      "outputs": [],
       "options": {
-        "command": "node --test apps/supabase/functions/impulso-auth/browser/client.test.mjs apps/supabase/scripts/build-auth-static.test.mjs"
+        "command": "npx supabase config push --project-ref txoorpmblpvqveeudafv --workdir apps"
       }
     },
-    "build-auth": {
+    "deploy": {
       "executor": "nx:run-commands",
       "cache": false,
-      "outputs": [
-        "{workspaceRoot}/apps/supabase/functions/impulso-auth/_generated"
-      ],
+      "dependsOn": ["build-auth"],
       "options": {
-        "command": "node apps/supabase/scripts/build-auth.mjs"
-      }
-    },
-    "build-auth-static": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": ["{workspaceRoot}/dist/apps/impulso-auth"],
-      "options": {
-        "command": "node apps/supabase/scripts/build-auth-static.mjs"
-      }
-    },
-    "prepare-remote-config": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": ["{workspaceRoot}/work/remote-setup/supabase/config.toml"],
-      "options": {
-        "command": "node apps/supabase/scripts/prepare-remote-config.mjs"
-      }
-    },
-    "test-remote-config": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "node --test apps/supabase/scripts/prepare-remote-config.test.mjs"
-      }
-    },
-    "doctor-tunnel": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "powershell -NoProfile -File apps/supabase/scripts/openai-tunnel.ps1 -Mode Doctor"
-      }
-    },
-    "run-tunnel": {
-      "executor": "nx:run-commands",
-      "cache": false,
-      "outputs": [],
-      "options": {
-        "command": "powershell -NoProfile -File apps/supabase/scripts/openai-tunnel.ps1 -Mode Run"
+        "command": "npx supabase functions deploy impulso-api --project-ref txoorpmblpvqveeudafv --workdir apps"
       }
     }
   }

@@ -2,19 +2,6 @@ import assert from "node:assert/strict";
 import { ApiError } from "../_shared/http.ts";
 import { createHandler } from "./handler.ts";
 
-const onboardingInput = {
-  request_id: "33333333-3333-4333-8333-333333333333",
-  display_name: "Test user",
-  workspace_name: "Personal workspace",
-  timezone: "UTC",
-};
-const googleIdentity = {
-  user_id: "11111111-1111-4111-8111-111111111111",
-  session_id: "22222222-2222-4222-8222-222222222222",
-  email: "user@example.com",
-  google_authenticated: true,
-};
-
 Deno.test("health is public and does not initialize authentication or disclose runtime details", async () => {
   const handler = createHandler({
     authenticate: () => {
@@ -29,56 +16,6 @@ Deno.test("health is public and does not initialize authentication or disclose r
   }
 });
 
-Deno.test("onboarding authenticates Google and validates input before invoking the service", async () => {
-  let calls = 0;
-  const handler = createHandler({
-    authenticate: () => Promise.resolve(googleIdentity),
-    onboard: (identity, input) => {
-      calls++;
-      assert.equal(identity, googleIdentity);
-      assert.deepEqual(input, onboardingInput);
-      return Promise.resolve({ workspace_id: "workspace", person_id: "person", status: "created" });
-    },
-  });
-  const submit = (body: unknown) =>
-    handler(
-      new Request("https://example.test/onboard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }),
-    );
-  assert.equal((await submit({ ...onboardingInput, actor_user_id: "other-user" })).status, 400);
-  assert.equal((await submit({ ...onboardingInput, timezone: "Unknown/Zone" })).status, 400);
-  assert.equal(calls, 0);
-  const response = await submit(onboardingInput);
-  assert.equal(response.status, 200);
-  assert.equal(calls, 1);
-  assert.deepEqual(await response.json(), {
-    workspace_id: "workspace",
-    person_id: "person",
-    status: "created",
-  });
-});
-
-Deno.test("password sessions cannot invoke onboarding even with a valid payload", async () => {
-  const handler = createHandler({
-    authenticate: () => Promise.resolve({ ...googleIdentity, google_authenticated: false }),
-    onboard: () => {
-      throw new Error("Non-Google sessions must not invoke the service.");
-    },
-  });
-  const response = await handler(
-    new Request("https://example.test/onboard", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(onboardingInput),
-    }),
-  );
-  assert.equal(response.status, 403);
-  assert.equal((await response.json()).error.code, "google_sign_in_required");
-});
-
 Deno.test("browser origins and preflights use an exact allowlist without credentials", async () => {
   const origin = "http://127.0.0.1:54321";
   const handler = createHandler({
@@ -88,11 +25,11 @@ Deno.test("browser origins and preflights use an exact allowlist without credent
     allowedOrigins: [origin],
   });
   const response = await handler(
-    new Request("https://example.test/onboard", {
+    new Request("https://example.test/session", {
       method: "OPTIONS",
       headers: {
         Origin: origin,
-        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Method": "GET",
         "Access-Control-Request-Headers": "authorization, content-type",
       },
     }),
@@ -101,8 +38,7 @@ Deno.test("browser origins and preflights use an exact allowlist without credent
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
   assert.equal(response.headers.get("Access-Control-Allow-Credentials"), null);
   const denied = await handler(
-    new Request("https://example.test/onboard", {
-      method: "POST",
+    new Request("https://example.test/session", {
       headers: { Origin: "https://untrusted.example" },
     }),
   );
@@ -138,6 +74,7 @@ Deno.test("unknown routes, methods and caller-selected identity parameters are r
   for (
     const [path, method, status] of [
       ["/sql", "POST", 404],
+      ["/onboard", "POST", 404],
       ["/session", "POST", 405],
       ["/health", "DELETE", 405],
       ["/session?user_id=another-user", "GET", 400],

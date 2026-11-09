@@ -436,3 +436,25 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/impulso-api/deno.json"
 entrypoint = "./functions/impulso-auth/index.ts"
+
+# Hosted project. Values here override the local settings above for `nx run supabase:push-config`.
+# The sign-in pages are hosted on Cloudflare Pages; set IMPULSO_AUTH_SITE_URL to that origin
+# (for example https://impulso-auth.pages.dev, no trailing slash) and IMPULSO_AUTH_CALLBACK_URL
+# to the same origin followed by /auth/callback before pushing.
+[remotes.production]
+project_id = "txoorpmblpvqveeudafv"
+
+[remotes.production.auth]
+site_url = "env(IMPULSO_AUTH_SITE_URL)"
+additional_redirect_urls = ["env(IMPULSO_AUTH_CALLBACK_URL)"]
+
+[remotes.production.auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_SECRET)"
+redirect_uri = "https://txoorpmblpvqveeudafv.supabase.co/auth/v1/callback"
+
+[remotes.production.auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = true

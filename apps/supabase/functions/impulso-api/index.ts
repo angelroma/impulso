@@ -3,16 +3,12 @@ import {
   allowedBrowserOrigins,
   createRuntimeAuthenticator,
   createRuntimeFinance,
-  createRuntimeOnboarding,
-  createRuntimeOnboardingStatus,
   mcpConfiguration,
 } from "./runtime.ts";
 
 Deno.serve(createHandler({
-  ...createRuntimeFinance(),
   authenticate: createRuntimeAuthenticator(),
-  onboard: createRuntimeOnboarding(),
-  onboardingStatus: createRuntimeOnboardingStatus(),
+  runFinance: createRuntimeFinance(),
   allowedOrigins: allowedBrowserOrigins(),
   mcp: mcpConfiguration(),
 }));

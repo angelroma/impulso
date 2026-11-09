@@ -1,30 +1,36 @@
-import { randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
-import postgres from 'postgres';
-import { localStatus } from './local-status.mjs';
+// Gives the local impulso_backend role a fresh random password and writes its connection URL
+// to functions/.env.local so `supabase functions serve` can use it.
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import postgres from "postgres";
+import { localStatus } from "./supabase-cli.mjs";
 
 const local = localStatus();
-const databaseUrl = new URL(local.DB_URL);
-if (databaseUrl.hostname !== '127.0.0.1' || databaseUrl.port !== '54322') {
-  throw new Error('Backend credentials may only be configured for the local Impulso database.');
-}
 const database = postgres(local.DB_URL, { max: 1, prepare: false, ssl: false });
 try {
-  const [role] = await database`SELECT rolname FROM pg_roles WHERE rolname = 'impulso_backend'`;
-  if (!role) throw new Error('Apply the backend access migrations first.');
-  const password = randomBytes(32).toString('hex');
-  // The password is generated hexadecimal, never caller input; ROLE DDL cannot bind parameters.
+  const [role] = await database`SELECT 1 FROM pg_roles WHERE rolname = 'impulso_backend'`;
+  if (!role) throw new Error("Run the migrations first: npx nx run supabase:migrate");
+  // Generated hexadecimal, never user input; ROLE DDL cannot take bound parameters.
+  const password = randomBytes(32).toString("hex");
   await database.unsafe(`ALTER ROLE impulso_backend LOGIN PASSWORD '${password}'`);
-  databaseUrl.username = 'impulso_backend';
-  databaseUrl.password = password;
-  databaseUrl.hostname = 'db';
-  databaseUrl.port = '5432';
-  const envPath = new URL('../functions/.env.local', import.meta.url);
-  const previous = readFileSync(envPath, 'utf8');
-  const next = previous.split(/\r?\n/).filter((line) => !line.startsWith('IMPULSO_DATABASE_URL=')).join('\n').trimEnd();
-  writeFileSync(envPath, `${next}\nIMPULSO_DATABASE_URL=${databaseUrl.href}\n`, { mode: 0o600 });
-  console.log('Local backend credentials configured. Restart function serving to load them.');
-} catch {
-  console.error('Local backend configuration failed. Check migrations and the local database connection.');
+
+  // Edge Functions run in Docker and reach Postgres through the `db` service name.
+  const backendUrl = new URL(local.DB_URL);
+  backendUrl.username = "impulso_backend";
+  backendUrl.password = password;
+  backendUrl.hostname = "db";
+  backendUrl.port = "5432";
+
+  const envFile = new URL("../functions/.env.local", import.meta.url);
+  const kept = readFileSync(envFile, "utf8").split(/\r?\n/)
+    .filter((line) => line && !line.startsWith("IMPULSO_DATABASE_URL="));
+  writeFileSync(envFile, [...kept, `IMPULSO_DATABASE_URL=${backendUrl.href}`, ""].join("\n"));
+  console.log("Configured local backend credentials. Restart `serve` to load them.");
+} catch (error) {
+  // Report the reason without printing connection strings or passwords.
+  const code = error?.code ? ` (${error.code})` : "";
+  console.error(`Backend configuration failed${code}: ${error?.message ?? "unknown error"}`);
   process.exitCode = 1;
-} finally { await database.end({ timeout: 5 }); }
+} finally {
+  await database.end({ timeout: 5 });
+}

@@ -1,29 +1,18 @@
 import type { VerifiedIdentity } from "../_shared/auth.ts";
-import { ApiError, errorResponse, jsonResponse, readJsonObject } from "../_shared/http.ts";
-import {
-  type OnboardingInput,
-  type OnboardingResult,
-  validateOnboardingInput,
-} from "../_shared/onboarding.ts";
+import { ApiError, errorResponse, jsonResponse } from "../_shared/http.ts";
 import {
   handleMcpRequest,
   mcpChallenge,
   type McpConfiguration,
   type McpDependencies,
-  type OnboardingStatus,
   protectedResourceMetadata,
   requireMcpIdentity,
 } from "./mcp.ts";
 
 export interface HandlerDependencies extends McpDependencies {
   readonly authenticate: (request: Request) => Promise<VerifiedIdentity>;
-  readonly onboard?: (
-    identity: VerifiedIdentity,
-    input: OnboardingInput,
-  ) => Promise<OnboardingResult>;
   readonly allowedOrigins?: readonly string[];
   readonly mcp?: McpConfiguration;
-  readonly onboardingStatus?: (identity: VerifiedIdentity) => Promise<OnboardingStatus>;
 }
 
 export function createHandler(dependencies: HandlerDependencies) {
@@ -49,12 +38,12 @@ export function createHandler(dependencies: HandlerDependencies) {
       const metadataRoute = route === "/.well-known/oauth-protected-resource";
       const mcpRoute = route === "/mcp";
       if (
-        route !== "/health" && route !== "/session" && route !== "/onboard" &&
+        route !== "/health" && route !== "/session" &&
         !(dependencies.mcp && (metadataRoute || mcpRoute))
       ) {
         throw new ApiError(404, "not_found", "The requested endpoint does not exist.");
       }
-      const method = route === "/onboard" || mcpRoute ? "POST" : "GET";
+      const method = mcpRoute ? "POST" : "GET";
       if (request.method === "OPTIONS") {
         const requestedHeaders = (request.headers.get("access-control-request-headers") ?? "")
           .toLowerCase().split(",").map((header) => header.trim()).filter(Boolean);
@@ -121,23 +110,6 @@ export function createHandler(dependencies: HandlerDependencies) {
           "oauth_route_not_allowed",
           "Use the MCP endpoint for this client connection.",
         );
-      }
-      if (route === "/onboard") {
-        if (!identity.google_authenticated) {
-          throw new ApiError(403, "google_sign_in_required", "Sign in with Google to continue.");
-        }
-        const input = validateOnboardingInput(
-          await readJsonObject(request, [
-            "request_id",
-            "display_name",
-            "workspace_name",
-            "timezone",
-          ]),
-        );
-        if (!dependencies.onboard) {
-          throw new ApiError(503, "service_unavailable", "The service is not configured.");
-        }
-        return respond(jsonResponse(await dependencies.onboard(identity, input)));
       }
       return respond(jsonResponse({ user: { id: identity.user_id, email: identity.email } }));
     } catch (error) {

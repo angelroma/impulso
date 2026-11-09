@@ -66,7 +66,7 @@ async function requestJson(url: string, init: RequestInit = {}) {
   return { response, body: object(body, "The protocol endpoint must return a JSON object.") };
 }
 
-Deno.test("Local MCP uses consented OAuth, PKCE and conversational onboarding", async (test) => {
+Deno.test("Local MCP uses consented OAuth, PKCE and the Finance tools", async (test) => {
   const environment = localEnvironment();
   const options = {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -82,7 +82,6 @@ Deno.test("Local MCP uses consented OAuth, PKCE and conversational onboarding", 
   let tokenEndpoint = "";
   let registrationEndpoint = "";
   let rpcId = 0;
-  let waitingImport: Record<string, unknown> | undefined;
 
   async function step(name: string, operation: () => Promise<void>) {
     assert(
@@ -524,20 +523,15 @@ Deno.test("Local MCP uses consented OAuth, PKCE and conversational onboarding", 
         object(tool, "Each tool needs a definition.").name
       );
       assert(
-        names.includes("get_session") && names.includes("onboard"),
-        "MCP must expose identity and onboarding through the conversation.",
+        names.includes("get_context") && names.includes("record_transaction"),
+        "MCP must expose the Finance tools through the conversation.",
       );
-      const session = await mcpClient.callTool({ name: "get_session", arguments: {} });
-      assert(!session.isError, "The consented OAuth identity must be accepted.");
-      const sessionData = object(
-        session.structuredContent,
-        "The identity tool needs structured data.",
-      );
+      const context = await mcpClient.callTool({ name: "get_context", arguments: {} });
+      assert(!context.isError, "The consented OAuth identity must be accepted.");
       assert(
-        object(sessionData.user, "The tool must identify its user.").id === user.userId &&
-          object(sessionData.onboarding, "The tool must expose onboarding state.").status ===
-            "required",
-        "A fresh client must see only its own identity and a required onboarding state.",
+        object(context.structuredContent, "The context tool needs structured data.")
+          .setup_required === true,
+        "A fresh client must see that setup is required.",
       );
     });
 
@@ -589,359 +583,51 @@ Deno.test("Local MCP uses consented OAuth, PKCE and conversational onboarding", 
       },
     );
 
-    const onboarding = {
-      request_id: crypto.randomUUID(),
-      display_name: "MCP integration user",
-      workspace_name: "Personal workspace",
-      timezone: "UTC",
-    };
-    await step("Conversational onboarding creates one scope and safely replays", async () => {
-      const first = await rpc("tools/call", { name: "onboard", arguments: onboarding }, oauthToken);
-      const repeated = await rpc(
-        "tools/call",
-        { name: "onboard", arguments: onboarding },
-        oauthToken,
-      );
-      const firstResult = object(first.body.result, "Onboarding must return a tool result.");
-      const repeatedResult = object(repeated.body.result, "A replay must return a tool result.");
+    await step("Delegated MCP creates a workspace and records an expense once", async () => {
+      const call = async (name: string, argumentsValue: Record<string, unknown>) => {
+        const reply = await rpc("tools/call", { name, arguments: argumentsValue }, oauthToken);
+        const result = object(reply.body.result, "A tool call must return a result.");
+        assert(!result.isError, `${name} must succeed for the delegated user.`);
+        return object(result.structuredContent, `${name} needs structured data.`);
+      };
+      await call("manage_workspace", {
+        action: "create",
+        name: "Personal",
+        currency: "MXN",
+        timezone: "America/Mexico_City",
+      });
+      await call("manage_account", { action: "create", name: "Efectivo", kind: "cash" });
+      const expense = {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "99.90",
+        payee: "Oxxo",
+      };
+      const first = await call("record_transaction", expense);
+      const repeated = await call("record_transaction", expense);
       assert(
-        !firstResult.isError && !repeatedResult.isError,
-        "A matching conversation retry must succeed without duplicate data.",
-      );
-      const initialData = object(
-        firstResult.structuredContent,
-        "Onboarding needs structured data.",
-      );
-      const replayData = object(
-        repeatedResult.structuredContent,
-        "An onboarding replay needs structured data.",
-      );
-      assert(
-        initialData.status === "created" && replayData.status === "already_processed" &&
-          initialData.workspace_id === replayData.workspace_id &&
-          initialData.person_id === replayData.person_id,
-        "A conversational retry must return the same existing workspace and person.",
+        first.status === "created" && repeated.status === "already_processed",
+        "A matching retry must not duplicate the expense.",
       );
       const [counts] = await database`
         SELECT
-          (SELECT count(*)::int FROM core.workspaces WHERE created_by_user_id = ${user.userId}) AS workspaces,
-          (SELECT count(*)::int FROM core.people WHERE created_by_user_id = ${user.userId}) AS people,
-          (SELECT count(*)::int FROM private.operation_receipts WHERE actor_user_id = ${user.userId}) AS receipts,
-          (SELECT count(*)::int FROM audit.events WHERE actor_user_id = ${user.userId}) AS events
+          (SELECT count(*)::int FROM app.workspaces WHERE owner_user_id = ${user.userId}) AS workspaces,
+          (SELECT count(*)::int FROM app.transactions WHERE request_id = ${expense.request_id}) AS transactions
       `;
       assert(
-        counts.workspaces === 1 && counts.people === 1 && counts.receipts === 1 &&
-          counts.events === 1,
-        "MCP onboarding and its retry must create one personal scope, receipt and event.",
+        counts.workspaces === 1 && counts.transactions === 1,
+        "The delegated user must own one workspace and one recorded expense.",
       );
       const invalid = await rpc("tools/call", {
-        name: "onboard",
-        arguments: { ...onboarding, user_id: crypto.randomUUID() },
+        name: "get_context",
+        arguments: { user_id: crypto.randomUUID() },
       }, oauthToken);
       assert(
         Boolean(invalid.body.error) ||
           object(invalid.body.result, "Invalid calls need a result.").isError,
         "A caller cannot select another account by adding a user_id argument.",
       );
-      assert(mcpClient, "The official MCP client must be initialized.");
-      const session = await mcpClient.callTool({ name: "get_session", arguments: {} });
-      const sessionData = object(
-        session.structuredContent,
-        "The identity tool needs structured data.",
-      );
-      const scope = object(sessionData.onboarding, "The identity tool needs onboarding state.");
-      assert(
-        scope.status === "complete" && scope.workspace_id === initialData.workspace_id &&
-          scope.person_id === initialData.person_id,
-        "After onboarding the same client must discover its existing personal scope.",
-      );
     });
-
-    await step(
-      "Delegated MCP records an expense through the real runtime and safely retries",
-      async () => {
-        async function call(name: string, argumentsValue: Record<string, unknown>) {
-          const reply = await rpc("tools/call", { name, arguments: argumentsValue }, oauthToken);
-          assert(
-            reply.response.status === 200,
-            "The delegated Finance tool must respond successfully.",
-          );
-          const result = object(reply.body.result, "Finance must return a tool result.");
-          assert(!result.isError, "A valid delegated Finance action must succeed.");
-          return object(result.structuredContent, "Finance needs structured output.");
-        }
-        const listed = await rpc("tools/list", {}, oauthToken);
-        const tools = object(listed.body.result, "Tool discovery needs a result.").tools;
-        assert(
-          Array.isArray(tools) && tools.length === 20,
-          "The runtime must advertise twenty tools.",
-        );
-        const session = await call("get_session", {});
-        const scope = object(session.onboarding, "Setup must be complete.");
-        const workspace_id = text(scope.workspace_id, "Setup needs a workspace identifier.");
-        const person_id = text(scope.person_id, "Setup needs a self identifier.");
-        const context = await call("get_finance_context", { workspace_id });
-        assert(
-          Array.isArray(context.books) && context.books.length === 0,
-          "Context must not create a book.",
-        );
-        const book = await call("create_book", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          name: "Everyday",
-          currency: "MXN",
-        });
-        const book_id = text(book.book_id, "The created book needs its identifier.");
-        const account = await call("create_account", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          name: "Main account",
-          currency: "MXN",
-          opening_balance: "0",
-          person_id,
-        });
-        const source_account_id = text(
-          account.account_id,
-          "The created account needs its identifier.",
-        );
-        const expense = {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          source_account_id,
-          amount: "100.00",
-          currency: "MXN",
-          occurred_on: "2026-10-13",
-          description: "Hamburguesa",
-          beneficiary_person_id: person_id,
-        };
-        const first = await call("record_expense", expense);
-        const repeated = await call("record_expense", expense);
-        assert(
-          first.status === "created" && repeated.status === "already_processed" &&
-            first.transaction_id === repeated.transaction_id && first.amount === "100.00" &&
-            first.description === "Hamburguesa" && first.occurred_on === expense.occurred_on,
-          "The real MCP runtime must preserve exact expense details and its retry identity.",
-        );
-        const [count] = await database`
-        SELECT (SELECT count(*)::int FROM finance.transactions WHERE request_id = ${expense.request_id}) AS transactions,
-          (SELECT count(*)::int FROM audit.events WHERE request_id = ${expense.request_id}) AS events,
-          (SELECT count(*)::int FROM private.operation_receipts WHERE request_id = ${expense.request_id}) AS receipts
-      `;
-        assert(
-          count.transactions === 1 && count.events === 1 && count.receipts === 1,
-          "A delegated MCP retry must not duplicate its expense, audit, or receipt.",
-        );
-        const accounts = await call("get_finance_context", { workspace_id, book_id });
-        assert(
-          Array.isArray(accounts.accounts) && accounts.accounts.length === 1 &&
-            !("transactions" in accounts) && !("balance" in accounts),
-          "Authorized context must return the configured account without exposing a ledger.",
-        );
-        await call("configure_account", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          account_id: source_account_id,
-          expected_version: 1,
-          account_kind: "bank",
-          opening_balance_on: "2026-01-01",
-        });
-        const cash = await call("create_account", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          name: "Cash",
-          currency: "MXN",
-          opening_balance: "0",
-          person_id,
-        });
-        const cashId = text(cash.account_id, "Cash needs an identifier.");
-        await call("configure_account", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          account_id: cashId,
-          expected_version: 1,
-          account_kind: "cash",
-          opening_balance_on: "2026-01-01",
-        });
-        const base = {
-          currency: "MXN",
-          occurred_on: "2026-10-13",
-          beneficiary_person_id: person_id,
-          category_id: null,
-        };
-        const income = {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          action: "single",
-          entry: {
-            ...base,
-            kind: "income",
-            destination_account_id: source_account_id,
-            amount: "500.00",
-            description: "Synthetic salary",
-          },
-        };
-        const received = await call("record_transaction", income);
-        const recovered = await call("record_transaction", income);
-        assert(
-          received.status === "created" && recovered.status === "already_processed",
-          "Income must recover through OAuth without duplication.",
-        );
-        await call("record_transaction", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          action: "single",
-          entry: {
-            ...base,
-            kind: "transfer",
-            source_account_id,
-            destination_account_id: cashId,
-            amount: "20.00",
-            description: "Synthetic cash transfer",
-          },
-        });
-        const report = await call("get_finance_report", {
-          workspace_id,
-          book_id,
-          report: "cash_flow",
-          starts_on: "2026-10-01",
-          ends_on: "2026-10-31",
-          as_of: "2026-10-13",
-        });
-        assert(
-          report.income === "500.00" && report.expense === "100.00" &&
-            report.transferred === "20.00" && report.income_less_expense === "400.00",
-          "The HTTP report must count salary and hamburger once and keep transfers neutral.",
-        );
-        const preview = await call("preview_finance_import", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          manifest: {
-            workbook_id: "synthetic-oauth-workbook",
-            source_version: "fixture-v1",
-            captured_at: "2026-10-13T12:00:00Z",
-            sheets: [{
-              sheet_id: 1,
-              title: "Synthetic 2026",
-              visibility: "visible",
-              source_kind: "active",
-              selection: "authoritative",
-              acknowledged_overlap: false,
-              ranges: ["D2"],
-            }],
-            rows: [{
-              sheet_id: 1,
-              source_cell: "D2",
-              period_start: "2026-09-01",
-              date_precision: "month",
-              observed_on: null,
-              original_text: "Hamburguesas",
-              displayed_value: "75.00",
-              raw_value: "75.00",
-              formula: null,
-              selected: true,
-              parser: "plain",
-              currency: "MXN",
-              expected_targets: [],
-              replacement: null,
-              mapping: {
-                role: "actual_summary",
-                accepted: true,
-                kind: "expense",
-                category_id: null,
-                coverage_scope: "complete",
-                coverage: {
-                  authority: "summary",
-                  expected_version: 0,
-                  reviewed_detail_count: 0,
-                  reviewed_detail_digest:
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                  accepted: true,
-                },
-              },
-            }],
-            reconciliation: {
-              annual_net: null,
-              monthly_net: null,
-              missing_annual_cells: [],
-              resolution: "unresolved",
-              excluded_cells: [],
-              accepted: true,
-            },
-          },
-        });
-        assert(
-          preview.status === "ready" && Array.isArray(preview.blockers) &&
-            preview.blockers.length === 0,
-          "A fully reviewed synthetic monthly row must be ready without posting a transaction.",
-        );
-        const commitInput = {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          batch_id: preview.batch_id,
-          expected_version: preview.version,
-          review_digest: preview.review_digest,
-          accepted: true,
-        };
-        const committed = await call("commit_finance_import", commitInput);
-        const again = await call("commit_finance_import", commitInput);
-        assert(
-          committed.status === "committed" && again.action_status === "already_processed",
-          "The accepted HTTP import must commit once and recover its exact result.",
-        );
-        const [facts] =
-          await database`SELECT (SELECT count(*)::int FROM finance.transactions WHERE book_id=${book_id}) AS entries,
-          (SELECT count(*)::int FROM finance.monthly_summaries WHERE book_id=${book_id}) AS summaries`;
-        assert(
-          facts.entries === 3 && facts.summaries === 1,
-          "Month-only history must remain a summary without an invented daily movement.",
-        );
-        const [saved] =
-          await database`SELECT manifest FROM finance.import_batches WHERE id=${preview
-            .batch_id as string}`;
-        const manifest = object(saved.manifest, "The synthetic batch needs its frozen manifest.");
-        const rows = manifest.rows as Record<string, unknown>[];
-        const pending = await call("preview_finance_import", {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          manifest: {
-            ...manifest,
-            sheets: [{
-              sheet_id: 1,
-              title: "Synthetic 2026",
-              visibility: "visible",
-              source_kind: "active",
-              selection: "authoritative",
-              acknowledged_overlap: false,
-              ranges: ["D3"],
-            }],
-            rows: [{ ...rows[0], source_cell: "D3", period_start: "2026-08-01" }],
-          },
-        });
-        assert(
-          pending.status === "ready",
-          "The consent-wait fixture must start with an uncommitted ready batch.",
-        );
-        waitingImport = {
-          request_id: crypto.randomUUID(),
-          workspace_id,
-          book_id,
-          batch_id: pending.batch_id,
-          expected_version: pending.version,
-          review_digest: pending.review_digest,
-          accepted: true,
-        };
-      },
-    );
 
     await step(
       "OAuth consent does not let a password-only account bypass Google identity",
@@ -1004,83 +690,6 @@ Deno.test("Local MCP uses consented OAuth, PKCE and conversational onboarding", 
       );
     });
 
-    await step(
-      "Revoking OAuth consent while an import waits rolls back its facts and receipt",
-      async () => {
-        assert(waitingImport, "A reviewed synthetic batch must be ready for the wait fixture.");
-        const blocker = createDatabase(environment.databaseUrl);
-        let release!: () => void;
-        let acquired!: () => void;
-        const locked = new Promise<void>((resolve) => {
-          acquired = resolve;
-        });
-        const unlock = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const holding = blocker.begin(async (sql) => {
-          await sql`SELECT id FROM core.workspaces WHERE id=${waitingImport!
-            .workspace_id as string} FOR UPDATE`;
-          acquired();
-          await unlock;
-        });
-        await locked;
-        const pending = rpc("tools/call", {
-          name: "commit_finance_import",
-          arguments: waitingImport,
-        }, oauthToken);
-        const outcomes = Promise.allSettled([holding, pending]);
-        let failure: unknown;
-        try {
-          let blocked = false;
-          const deadline = Date.now() + 2000;
-          while (Date.now() < deadline) {
-            const [activity] = await database`SELECT count(*)::int AS count FROM pg_stat_activity
-            WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM core.workspaces%'`;
-            if (activity.count > 0) {
-              blocked = true;
-              break;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 20));
-          }
-          assert(
-            blocked,
-            "The delegated import must actually wait on its workspace before consent revocation.",
-          );
-          await database`UPDATE auth.oauth_consents SET revoked_at=now() WHERE user_id=${user.userId} AND client_id=${clientId}`;
-        } catch (error) {
-          failure = error;
-        } finally {
-          release();
-        }
-        const results = await outcomes;
-        await blocker.end({ timeout: 5 });
-        if (failure) throw failure;
-        assert(
-          results[1].status === "fulfilled",
-          "The waiting HTTP request must return a controlled denial.",
-        );
-        const reply = results[1].value as Awaited<ReturnType<typeof rpc>>;
-        const error = reply.body.result
-          ? JSON.parse((reply.body.result as { content: { text: string }[] }).content[0].text).error
-          : reply.body.error;
-        assert(
-          error?.code === "invalid_session",
-          "Live consent must be checked after the resource lock wait.",
-        );
-        const [unchanged] = await database`SELECT
-        (SELECT count(*)::int FROM private.operation_receipts WHERE request_id=${waitingImport
-          .request_id as string}) AS receipts,
-        (SELECT count(*)::int FROM audit.events WHERE request_id=${waitingImport
-          .request_id as string}) AS events,
-        (SELECT count(*)::int FROM finance.monthly_summaries WHERE book_id=${waitingImport
-          .book_id as string} AND period_start='2026-08-01') AS facts`;
-        assert(
-          unchanged.receipts === 0 && unchanged.events === 0 && unchanged.facts === 0,
-          "Revocation while waiting must leave no imported fact, success receipt or audit.",
-        );
-      },
-    );
-
     await step("Revoking client consent immediately rejects tokens and refresh", async () => {
       // Restore only this disposable consent so the separate native Auth revocation is exercised too.
       await database`UPDATE auth.oauth_consents SET revoked_at=NULL WHERE user_id=${user.userId} AND client_id=${clientId}`;
@@ -1119,61 +728,16 @@ Deno.test("Local MCP uses consented OAuth, PKCE and conversational onboarding", 
     try {
       if (users.length > 0) {
         await database.begin(async (sql) => {
-          const scopes = await sql<{ id: string }[]>`
-            SELECT id FROM core.workspaces WHERE created_by_user_id = ANY(${sql.array(users, 2950)})
-          `;
-          const ids = scopes.map((scope) => scope.id);
-          await sql`DELETE FROM audit.events WHERE actor_user_id = ANY(${sql.array(users, 2950)})`;
-          await sql`DELETE FROM private.operation_receipts WHERE actor_user_id = ANY(${
+          const owned = sql`
+            SELECT id FROM app.workspaces WHERE owner_user_id = ANY(${sql.array(users, 2950)})`;
+          await sql`DELETE FROM app.transactions WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.payees WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.projects WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.categories WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.accounts WHERE workspace_id IN (${owned})`;
+          await sql`DELETE FROM app.workspaces WHERE owner_user_id = ANY(${
             sql.array(users, 2950)
           })`;
-          if (ids.length > 0) {
-            await sql`DELETE FROM finance.report_coverage WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`UPDATE finance.import_rows SET result_summary_id=NULL, consumed_at=NULL WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.monthly_summaries WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.import_rows WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.import_batches WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.transaction_classifications WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.transaction_groups WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.transactions WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.accounts WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.book_access WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM finance.books WHERE workspace_id = ANY(${sql.array(ids, 2950)})`;
-            await sql`DELETE FROM core.person_aliases WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM core.person_access WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM core.person_user_links WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM core.people WHERE workspace_id = ANY(${sql.array(ids, 2950)})`;
-            await sql`DELETE FROM core.workspace_members WHERE workspace_id = ANY(${
-              sql.array(ids, 2950)
-            })`;
-            await sql`DELETE FROM core.workspaces WHERE id = ANY(${sql.array(ids, 2950)})`;
-          }
         });
       }
     } catch {
