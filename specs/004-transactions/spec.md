@@ -92,8 +92,8 @@ and a search word.
 
 1. **Given** more transactions than the page size, **When** they are listed, **Then** the newest
    page is returned with a cursor that returns the next page.
-2. **Given** a search word, **When** listing, **Then** transactions whose payee name or notes
-   contain it are returned, without regard to case.
+2. **Given** a search word, **When** listing, **Then** transactions whose payee, category or
+   account name or notes contain it are returned, without regard to case.
 3. **Given** deleted transactions, **When** listing normally, **Then** they are left out; when
    deleted ones are asked for, they are included and marked.
 
@@ -153,9 +153,12 @@ category and payee names.
   the same currency.
 - **FR-010**: A user MUST be able to list transactions newest first, in pages of 25 by default
   and at most 100, filtered by date range, account, category, payee, project and kind, and
-  searched by payee name or notes.
+  searched by payee, category or account name or notes.
 - **FR-011**: Every account, category, payee and project on a transaction MUST belong to the
   transaction's workspace.
+- **FR-012**: When a request id is reused and the new request's kind, amount, date, account,
+  payee or category differs from the stored transaction, the reply MUST say so, so the
+  assistant can tell the user that nothing new was recorded.
 
 ### Key Entities
 
@@ -173,17 +176,19 @@ category and payee names.
 
 ## Assumptions
 
-- Recurring transactions, a cleared flag, tags and paired transfer rows were rejected and are
-  out of scope.
+- Recurring transactions, a cleared flag, tags, paired transfer rows and transfers between
+  currencies were rejected and are out of scope.
 - Amounts are in the account's currency; nothing is converted.
 - Future-dated transactions are allowed.
 
-## Open Questions
+## Clarifications
 
-- **Retry with different data**: a repeated request id returns the original transaction even if
-  the new request has a different amount or payee. Should a mismatch be reported?
-- **Search scope**: search covers payee and notes, not category or account names. Enough?
-- **Cross-currency transfers** are refused outright. Is a transfer with two amounts ever needed?
+### Session 2026-11-09
+
+- Q: Should a retry whose data differs from the original be reported? → A: Yes, always.
+- Q: Is searching payee and notes enough? → A: No. Search should cover everything that
+  identifies a transaction, shown consistently and without being intrusive.
+- Q: Are transfers between currencies needed? → A: No. The user works in one currency (MXN).
 
 ## Implementation Reference
 
@@ -193,5 +198,6 @@ category and payee names.
   (`listTransactions`), `finance.ts` (request-id lock)
 - Schema: `apps/supabase/schemas/finance/tables/transactions.sql`, `transaction_kinds.sql`
 - Tests: `functions/tests/integration_test.ts` ("Transactions use defaults, retry safely and keep
-  balances", "Transactions and accounts move…"), `oauth_mcp_integration_test.ts` ("…records an
-  expense once"), `tests/database/impulso_schema.test.sql`
+  balances", "Transactions and accounts move…",
+  "Restores and notices tell the user what a change affects"),
+  `oauth_mcp_integration_test.ts` ("…records an expense once"), `tests/database/impulso_schema.test.sql`

@@ -136,13 +136,15 @@ both fail.
   all ten tools.
 - Clients may register themselves; every grant still needs the user's approval.
 
-## Open Questions
+## Clarifications
 
-- **Who may sign up**: the product is described as single-user, but any Google account can sign
-  in and get its own empty space. Restrict sign-in to an allowed list of emails?
-- **Reviewing approved clients**: revocation works, but there is no Impulso page listing the
-  clients a user has approved. Needed?
-- **Read-only access**: there is no way to approve a client for reading only. Wanted?
+### Session 2026-11-09
+
+- Q: Should sign-in be restricted to a list of emails? → A: No. Anyone with a Google account may
+  use Impulso. Each user gets their own space and can never see another user's; the schema and
+  its permissions must keep that clear. This is how it works today.
+- Q: Is a page listing approved clients needed? → A: No extra pages for now.
+- Q: Is read-only approval of a client wanted? → A: No.
 
 ## Implementation Reference
 

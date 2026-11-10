@@ -110,6 +110,11 @@ and confirm it no longer appears in context.
   zone, active accounts with balances, active categories with their parent, active payees
   (most used first, at most 100) and active projects with progress.
 - **FR-011**: A user MUST only ever see or change their own workspaces.
+- **FR-012**: A user MUST be able to restore an archived workspace. Restoring is refused while
+  another active workspace uses its name. It becomes the default only if the user has no other
+  active workspace.
+- **FR-013**: The reply to archiving a workspace MUST say how many active accounts and
+  transactions are now hidden and that the workspace can be restored.
 
 ### Key Entities
 
@@ -125,22 +130,28 @@ and confirm it no longer appears in context.
 
 ## Assumptions
 
-- One person uses the system; "workspaces" separate purposes, not people. There is no sharing.
+- Each signed-in user has their own isolated set of workspaces. A workspace may hold the books
+  of the user or of someone else they manage; it is never shared with another user.
 - "Today" for defaults and summaries is computed in the workspace time zone.
 
-## Open Questions
+## Clarifications
 
-- **Language of the default categories**: they are seeded in Mexican Spanish, but the
-  constitution says system-generated defaults are in English. Amend the rule or the seed?
-- **No unarchive**: an archived workspace cannot be brought back through the tools. Intended?
-- **Archiving with content**: a workspace with accounts and transactions can be archived with no
-  warning. Should the reply say how much is being hidden?
+### Session 2026-11-09
+
+- Q: Default categories are in Spanish but the constitution said defaults are in English. Which
+  changes? → A: The categories stay in Spanish; the constitution was amended (1.2.0).
+- Q: Should an archived workspace be recoverable? → A: Yes.
+- Q: Should archiving a workspace with content give a notice? → A: Yes.
+- Q: Is sign-up limited to one person? → A: No. Any Google user may use Impulso; each sees only
+  their own workspaces (see 007).
 
 ## Implementation Reference
 
-- Tools: `get_context`, `manage_workspace` (create, update, archive)
+- Tools: `get_context`, `manage_workspace` (create, update, archive, restore)
 - Code: `apps/supabase/functions/_shared/finance/workspaces.ts`, `default_categories.ts`,
   `common.ts` (`resolveWorkspace`, `validCurrency`, `validTimezone`)
 - Schema: `apps/supabase/schemas/finance/tables/workspaces.sql`, `currencies.sql`
 - Tests: `functions/tests/integration_test.ts` ("A new user sets up workspaces…", "Guards
-  keep…"), `tests/database/impulso_schema.test.sql`
+  keep…",
+  "Restores and notices tell the user what a change affects"),
+  `tests/database/impulso_schema.test.sql`

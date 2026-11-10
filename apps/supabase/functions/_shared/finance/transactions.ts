@@ -8,6 +8,7 @@ import {
   activeProject,
   definedFields,
   fail,
+  liabilityNotices,
   loadTransaction,
   mapCategory,
   mapPayee,
@@ -17,6 +18,7 @@ import {
   resolveWorkspace,
   type Sql,
   today,
+  withNotices,
 } from "./common.ts";
 
 interface Links {
@@ -117,7 +119,15 @@ export async function recordTransaction(sql: Sql, userId: string, input: RecordT
     if (existing.owner_user_id !== userId) {
       throw fail(409, "request_conflict", "Use a new request_id for a new transaction.");
     }
-    return { status: "already_processed", transaction: await loadTransaction(sql, existing.id) };
+    const differs = await retryDifferences(sql, existing.id, input);
+    return withNotices(
+      { status: "already_processed", transaction: await loadTransaction(sql, existing.id) },
+      differs.length === 0 ? [] : [
+        `This request_id was already used for a different transaction (differs in: ${
+          differs.join(", ")
+        }). Nothing new was recorded; use a new request_id to record a new one.`,
+      ],
+    );
   }
   const workspace = await resolveWorkspace(sql, userId, input.workspace_id);
   const links = await resolveLinks(sql, workspace.id, {
@@ -137,11 +147,52 @@ export async function recordTransaction(sql: Sql, userId: string, input: RecordT
       ${input.notes ?? null}, ${input.request_id})
     RETURNING id`;
   const [balance] = await accountBalances(sql, workspace.id, links.account_id);
-  return {
+  return withNotices({
     status: "created",
     transaction: await loadTransaction(sql, created.id),
     account_balance: balance?.balance,
-  };
+  }, await notices(sql, workspace.id, input.kind, links));
+}
+
+/** The fields a retried request sent that do not match the transaction stored under its id. */
+async function retryDifferences(
+  sql: Sql,
+  transactionId: string,
+  input: RecordTransactionInput,
+): Promise<string[]> {
+  const same = sql`false`;
+  const [row] = await sql<Record<string, boolean>[]>`
+    SELECT t.kind <> ${input.kind} AS kind,
+      t.amount <> ${input.amount}::numeric AS amount,
+      ${input.date ? sql`t.occurred_on <> ${input.date}::date` : same} AS date,
+      ${input.account_id ? sql`t.account_id <> ${input.account_id}::uuid` : same} AS account,
+      ${
+    input.payee ? sql`lower(p.name) IS DISTINCT FROM lower(${input.payee}::text)` : same
+  } AS payee,
+      ${
+    input.category_id ? sql`t.category_id IS DISTINCT FROM ${input.category_id}::uuid` : same
+  } AS category
+    FROM finance.transactions t LEFT JOIN finance.payees p ON p.id = t.payee_id
+    WHERE t.id = ${transactionId}`;
+  return Object.entries(row).filter(([, differs]) => differs).map(([field]) => field);
+}
+
+const TRANSFER_IN_PROJECT = "Transfers do not count toward a project; record it as an expense " +
+  "or an income to count it.";
+
+/** What the user should hear about after a change: odd card or loan balances, unused tags. */
+async function notices(
+  sql: Sql,
+  workspaceId: string,
+  kind: string,
+  links: Pick<Links, "account_id" | "to_account_id" | "project_id">,
+  alsoAccounts: (string | null)[] = [],
+): Promise<string[]> {
+  const accounts = [...new Set([links.account_id, links.to_account_id, ...alsoAccounts])];
+  return [
+    ...await liabilityNotices(sql, workspaceId, accounts),
+    ...(kind === "transfer" && links.project_id ? [TRANSFER_IN_PROJECT] : []),
+  ];
 }
 
 export function updateTransaction(sql: Sql, userId: string, input: UpdateTransactionInput) {
@@ -187,7 +238,25 @@ const editTransaction: Action<UpdateTransactionInput> = async (sql, userId, inpu
   await sql`UPDATE finance.transactions SET ${
     sql(changes)
   }, updated_at = now() WHERE id = ${current.id}`;
-  return { status: "updated", transaction: await loadTransaction(sql, current.id) };
+  // A changed payee never replaces the category on its own; its default is only suggested.
+  const payeeChanged = typeof input.payee === "string" && links.payee_id !== current.payee_id;
+  const [suggested] = payeeChanged && input.category_id === undefined && kind !== "transfer"
+    ? await sql<{ id: string; name: string }[]>`
+      SELECT c.id, c.name FROM finance.payees p
+      JOIN finance.categories c ON c.id = p.default_category_id
+      WHERE p.id = ${links.payee_id} AND c.kind = ${kind} AND c.archived_at IS NULL`
+    : [];
+  return withNotices(
+    {
+      status: "updated",
+      transaction: await loadTransaction(sql, current.id),
+      ...(suggested && suggested.id !== links.category_id ? { suggested_category: suggested } : {}),
+    },
+    await notices(sql, current.workspace_id, kind, links, [
+      current.account_id,
+      current.to_account_id,
+    ]),
+  );
 };
 
 /** Delete and restore differ only in the deleted_at value they set. */
@@ -198,10 +267,16 @@ function setDeleted(deleted: boolean): Action<UpdateTransactionInput> {
       UPDATE finance.transactions
       SET deleted_at = ${deleted ? sql`now()` : null}, updated_at = now()
       WHERE id = ${current.id}`;
-    return {
-      status: deleted ? "deleted" : "restored",
-      transaction: await loadTransaction(sql, current.id),
-    };
+    return withNotices(
+      {
+        status: deleted ? "deleted" : "restored",
+        transaction: await loadTransaction(sql, current.id),
+      },
+      await liabilityNotices(sql, current.workspace_id, [
+        current.account_id,
+        current.to_account_id,
+      ]),
+    );
   };
 }
 

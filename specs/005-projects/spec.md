@@ -94,6 +94,13 @@ The user closes a finished project and can reopen it if something else comes up.
 - **FR-007**: Context MUST list only active projects, each with budget, spent and remaining.
 - **FR-008**: A project belongs to one workspace; only that workspace's transactions can be
   tagged to it.
+- **FR-009**: The reply to recording or editing a transfer tagged to a project MUST say that it
+  does not count toward the project, so the assistant can ask whether it should be an expense
+  or an income instead.
+- **FR-010**: When a project name is already taken, the reply MUST say whether the existing
+  project is active or closed.
+- **FR-011**: Project progress MUST report tagged transactions left out for being in another
+  currency: how many and their total per currency.
 
 ### Key Entities
 
@@ -112,15 +119,21 @@ The user closes a finished project and can reopen it if something else comes up.
 - Category budgets were rejected; the project budget is the only budget.
 - Start and end dates are informational; they do not limit which transactions can be tagged.
 
-## Open Questions
+## Clarifications
 
-- **Debt payments made as transfers**: a transfer tagged to a project does not count toward
-  spent, so paying a debt by transfer does not reduce remaining. Should tagged transfers count?
-- **No archive or delete**: a project can only be closed, and its name stays taken. Should a
-  closed project's name be reusable?
-- **Other currencies**: tagged transactions on accounts in another currency are silently left
-  out of spent. Should the reply say so?
-- **Money owed to the user**: a debt someone owes the user has no clear model here. Needed?
+### Session 2026-11-09
+
+- Q: Should a transfer tagged to a project count toward spent? → A: Not automatically. A project
+  has money spent on it and money earned from it, so the assistant asks the user which one it
+  is and records it as an expense or an income. Every reply ends with a short summary of what
+  was done, so the user can ask for a correction.
+- Q: Should a closed project's name be reusable? → A: No. Equal names are confusing. The user is
+  told the name is taken and the assistant suggests another.
+- Q: Should transactions in another currency count toward spent? → A: No, they stay apart, but
+  the user must be told.
+- Q: How is money owed to the user modelled? → A: With the existing model, and the assistant
+  suggests how. Convention: a project per loan; lending the money is an expense tagged to it,
+  each repayment is an income tagged to it, and it is closed when spent is back to zero.
 
 ## Implementation Reference
 
@@ -129,4 +142,6 @@ The user closes a finished project and can reopen it if something else comes up.
   `activeProject`)
 - Schema: `apps/supabase/schemas/finance/tables/projects.sql`, `project_statuses.sql`
 - Tests: `functions/tests/integration_test.ts` ("Projects track spending against their
-  budget"), `tests/database/impulso_schema.test.sql`
+  budget",
+  "Restores and notices tell the user what a change affects"),
+  `tests/database/impulso_schema.test.sql`

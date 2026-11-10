@@ -28,9 +28,9 @@ export const getContextInput = z.object({
 }).strict();
 
 export const manageWorkspaceInput = z.object({
-  action: z.enum(["create", "update", "archive"]),
+  action: z.enum(["create", "update", "archive", "restore"]),
   workspace_id: uuid.optional().describe("Required for update and archive."),
-  name: name.optional(),
+  name: name.optional().describe("Also finds an archived workspace to restore."),
   currency: currency.optional().describe("Required for create, for example MXN."),
   timezone: z.string().min(1).max(64).optional().describe(
     "IANA zone such as America/Mexico_City. Required for create.",
@@ -39,10 +39,10 @@ export const manageWorkspaceInput = z.object({
 }).strict();
 
 export const manageAccountInput = z.object({
-  action: z.enum(["create", "update", "archive", "move"]),
+  action: z.enum(["create", "update", "archive", "restore", "move"]),
   workspace_id: uuid.optional().describe("Workspace for create; omit to use the default."),
   account_id: uuid.optional().describe("Required for update, archive and move."),
-  name: name.optional(),
+  name: name.optional().describe("Also finds an archived account to restore."),
   type: accountType.optional().describe("Defaults to checking on create."),
   currency: currency.optional().describe("Defaults to the workspace currency on create."),
   opening_balance: signedAmount.optional().describe(
@@ -53,12 +53,13 @@ export const manageAccountInput = z.object({
 }).strict();
 
 export const manageCategoryInput = z.object({
-  action: z.enum(["create", "update", "archive"]),
+  action: z.enum(["create", "update", "archive", "restore"]),
   workspace_id: uuid.optional(),
   category_id: uuid.optional().describe("Required for update and archive."),
-  name: name.optional(),
+  name: name.optional().describe("Also finds an archived category to restore."),
   kind: z.enum(["income", "expense"]).optional().describe(
-    "Required to create a top-level category; a subcategory takes its parent's kind.",
+    "Required to create a top-level category; a subcategory takes its parent's kind. " +
+      "It can change only while no transaction or subcategory uses the category.",
   ),
   parent_id: uuid.nullable().optional().describe(
     "Top-level category this one belongs under, e.g. Renta under Vivienda; null makes it top-level.",
@@ -66,10 +67,10 @@ export const manageCategoryInput = z.object({
 }).strict();
 
 export const managePayeeInput = z.object({
-  action: z.enum(["create", "update", "archive", "merge"]),
+  action: z.enum(["create", "update", "archive", "restore", "merge"]),
   workspace_id: uuid.optional(),
   payee_id: uuid.optional().describe("Required for update, archive and merge."),
-  name: name.optional(),
+  name: name.optional().describe("Also finds an archived payee to restore."),
   default_category_id: uuid.nullable().optional(),
   into_payee_id: uuid.optional().describe("Merge target; its transactions keep this payee."),
 }).strict();
@@ -123,7 +124,9 @@ export const listTransactionsInput = z.object({
   payee_id: uuid.optional(),
   project_id: uuid.optional(),
   kind: transactionKind.optional(),
-  search: z.string().trim().min(1).max(100).optional().describe("Matches payee or notes."),
+  search: z.string().trim().min(1).max(100).optional().describe(
+    "Matches payee, notes, category or account.",
+  ),
   include_deleted: z.boolean().optional(),
   limit: z.number().int().min(1).max(100).optional(),
   cursor: z.string().max(200).optional(),
@@ -133,7 +136,8 @@ export const getSummaryInput = z.object({
   workspace_id: uuid.optional(),
   from: date.optional().describe("Defaults to the first day of the current month."),
   to: date.optional().describe("Defaults to today."),
-  group_by: z.enum(["category", "payee", "project", "account", "month"]).optional(),
+  group_by: z.enum(["category", "top_category", "payee", "project", "account", "month"])
+    .optional().describe("top_category adds subcategories into their parent."),
 }).strict();
 
 export type GetContextInput = z.infer<typeof getContextInput>;
@@ -154,7 +158,7 @@ export const FINANCE_TOOLS = {
     input: getContextInput,
     description:
       "Start here. Returns your workspaces and, for the chosen or default workspace: today's date, " +
-      "accounts with balances, categories, payees and active projects with budget progress. " +
+      "accounts with balances and totals, categories, payees and active projects with progress. " +
       "Use these lists as quick choices. setup_required means no workspace exists yet.",
   },
   manage_workspace: {
@@ -162,7 +166,7 @@ export const FINANCE_TOOLS = {
     readOnly: false,
     input: manageWorkspaceInput,
     description:
-      "Create, rename, change currency/time zone, set as default, or archive a workspace. " +
+      "Create, rename, change currency/time zone, set as default, archive or restore a workspace. " +
       "Each workspace is independent and starts with default categories. The first one becomes " +
       "the default.",
   },
@@ -171,7 +175,7 @@ export const FINANCE_TOOLS = {
     readOnly: false,
     input: manageAccountInput,
     description:
-      "Create, rename, update type/opening balance, set default, archive, or move an account to " +
+      "Create, rename, update type/opening balance, set default, archive, restore, or move an account to " +
       "another workspace together with all its transactions.",
   },
   manage_category: {
@@ -179,7 +183,7 @@ export const FINANCE_TOOLS = {
     readOnly: false,
     input: manageCategoryInput,
     description:
-      "Create, rename, move under a parent or archive an income or expense category. Keep " +
+      "Create, rename, move under a parent, archive or restore an income or expense category. Keep " +
       "categories general (Suscripciones, Renta); who was paid is the payee, not a category.",
   },
   manage_payee: {
@@ -187,7 +191,8 @@ export const FINANCE_TOOLS = {
     readOnly: false,
     input: managePayeeInput,
     description:
-      "Create, rename, set default category, archive, or merge a duplicate payee into another.",
+      "Create, rename, set default category, archive, restore, or merge a duplicate payee into " +
+      "another.",
   },
   manage_project: {
     title: "Manage project",
@@ -224,8 +229,8 @@ export const FINANCE_TOOLS = {
     readOnly: true,
     input: getSummaryInput,
     description:
-      "Totals of income, expense and net for a period, optionally grouped by category, payee, " +
-      "project, account or month. Defaults to the current month.",
+      "Totals of income, expense and net for a period, optionally grouped by category, top-level " +
+      "category, payee, project, account or month. Defaults to the current month.",
   },
 } as const;
 

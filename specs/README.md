@@ -18,8 +18,10 @@ is no `plan.md` or `tasks.md` because the work is done.
 
 - **Requirements** state what the system does today. Each is covered by code; the
   "Implementation reference" section of each spec names the files and tests.
-- **Open questions** are behaviors found in the code that nobody decided on purpose, or gaps.
-  They are not requirements. Answer one by amending the spec, then change the code if needed.
+- **Clarifications** record the user's decisions on behaviors nobody had decided on purpose.
+- **Planned changes** (PC-###) are decided but not built yet. When one is implemented it moves
+  into the requirements. None are pending: the 2026-11-09 decisions are all implemented.
+- **Open questions** are still undecided. They are not requirements.
 
 ## Going forward
 

@@ -102,6 +102,49 @@ const archiveAccount: Action<ManageAccountInput> = async (sql, userId, input) =>
   return { status: "archived", account: summary };
 };
 
+/** Brings an archived account back; it is found by id or, failing that, by name. */
+const restoreAccount: Action<ManageAccountInput> = async (sql, userId, input) => {
+  if (!input.account_id && !input.name) throw required("account_id or name", "restore an account");
+  let accountId = input.account_id;
+  if (!accountId) {
+    const workspace = await resolveWorkspace(sql, userId, input.workspace_id);
+    const [archived] = await sql<{ id: string }[]>`
+      SELECT id FROM finance.accounts
+      WHERE workspace_id = ${workspace.id} AND lower(name) = lower(${input.name!})
+        AND archived_at IS NOT NULL
+      ORDER BY archived_at DESC LIMIT 1`;
+    if (!archived) throw notFound("The archived account");
+    accountId = archived.id;
+  }
+  const { workspace, account } = await ownedAccount(
+    sql,
+    userId,
+    { ...input, account_id: accountId },
+    { active: false },
+  );
+  if (account.archived_at) {
+    const [taken] = await sql`
+      SELECT 1 FROM finance.accounts
+      WHERE workspace_id = ${workspace.id} AND lower(name) = lower(${account.name})
+        AND archived_at IS NULL`;
+    if (taken) {
+      throw fail(
+        409,
+        "name_taken",
+        "An active account uses that name. Rename it before restoring this one.",
+      );
+    }
+    await sql`UPDATE finance.accounts SET archived_at = NULL, updated_at = now()
+      WHERE id = ${account.id}`;
+    // It becomes the default only when the workspace has no other active account.
+    await ensureDefaultAccount(sql, workspace.id);
+  }
+  return {
+    status: account.archived_at ? "restored" : "already_active",
+    account: (await accountBalances(sql, workspace.id, account.id))[0],
+  };
+};
+
 /**
  * Moves an account with all its transactions. Categories and payees are matched by name in the
  * target (created when missing) and projects are cleared, because workspaces are independent.
@@ -175,6 +218,7 @@ const ACCOUNT_ACTIONS: Record<ManageAccountInput["action"], Action<ManageAccount
   create: createAccount,
   update: updateAccount,
   archive: archiveAccount,
+  restore: restoreAccount,
   move: moveAccount,
 };
 

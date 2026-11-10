@@ -57,7 +57,7 @@ category.
 - A start date after the end date is refused.
 - A workspace with accounts in several currencies gets one total per currency; amounts are never
   added across currencies or converted.
-- At most 100 groups are returned.
+- At most 100 groups are returned; when more exist the reply says the list was cut off.
 - A period with no transactions returns an empty list of totals.
 
 ## Requirements
@@ -76,6 +76,10 @@ category.
 - **FR-006**: Groups MUST be ordered by expense, largest first; months in chronological order.
 - **FR-007**: When grouped by category, each group MUST also name its parent category.
 - **FR-008**: Summaries MUST NOT change any data.
+- **FR-009**: A user MUST be able to group a summary by top-level category, where each
+  subcategory counts toward its parent. It is computed on read; nothing is stored.
+- **FR-010**: When more than 100 groups exist, the reply MUST say the list was cut off. (No
+  end-to-end test covers this yet.)
 
 ### Key Entities
 
@@ -93,16 +97,20 @@ category.
   conversation only.
 - Net is income minus expense for the period, not a change in account balances.
 
-## Open Questions
+## Clarifications
 
-- **Roll-up to parent categories**: each subcategory is its own group; there is no total per
-  top-level category. Wanted?
-- **More than 100 groups**: the rest are cut off without notice. Should the reply say so?
-- **Comparison with a previous period** is not available. Wanted?
+### Session 2026-11-09
+
+- Q: Is a total per top-level category wanted? → A: Only if it follows best practice: nothing
+  stored twice. It is computed from the transactions when asked for.
+- Q: Should the reply say when groups were cut off? → A: Yes.
+- Q: Is comparison with a previous period wanted? → A: Only when the user asks, and nothing is
+  stored for it. The assistant requests two summaries; no new tool or table.
 
 ## Implementation Reference
 
 - Tool: `get_summary`
 - Code: `apps/supabase/functions/_shared/finance/reports.ts` (`getSummary`)
 - Tests: `functions/tests/integration_test.ts` ("Transactions use defaults, retry safely and keep
-  balances", "Projects track spending against their budget")
+  balances", "Projects track spending against their budget",
+  "Restores and notices tell the user what a change affects")

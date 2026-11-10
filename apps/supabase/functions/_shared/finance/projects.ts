@@ -2,6 +2,7 @@ import type { ManageProjectInput } from "../finance_contracts.ts";
 import {
   type Action,
   definedFields,
+  fail,
   notFound,
   projectProgress,
   required,
@@ -17,6 +18,7 @@ export function manageProject(sql: Sql, userId: string, input: ManageProjectInpu
 const createProject: Action<ManageProjectInput> = async (sql, userId, input) => {
   const workspace = await resolveWorkspace(sql, userId, input.workspace_id);
   if (!input.name) throw required("name", "create a project");
+  await nameFree(sql, workspace.id, input.name);
   const [project] = await sql<{ id: string }[]>`
     INSERT INTO finance.projects (workspace_id, name, budget, start_date, end_date, notes)
     VALUES (${workspace.id}, ${input.name}, ${input.budget ?? null}, ${input.start_date ?? null},
@@ -27,6 +29,7 @@ const createProject: Action<ManageProjectInput> = async (sql, userId, input) => 
 
 const updateProject: Action<ManageProjectInput> = async (sql, userId, input) => {
   const { workspace, projectId } = await ownedProject(sql, userId, input);
+  if (input.name) await nameFree(sql, workspace.id, input.name, projectId);
   const changes = definedFields({
     name: input.name,
     budget: input.budget,
@@ -56,6 +59,20 @@ const PROJECT_ACTIONS: Record<ManageProjectInput["action"], Action<ManageProject
   close: setStatus("closed", "closed"),
   reopen: setStatus("active", "reopened"),
 };
+
+/** Project names are unique even after closing, so the reply says which kind holds the name. */
+async function nameFree(sql: Sql, workspaceId: string, name: string, exceptId?: string) {
+  const [other] = await sql<{ id: string; status: string }[]>`
+    SELECT id, status FROM finance.projects
+    WHERE workspace_id = ${workspaceId} AND lower(name) = lower(${name})`;
+  if (other && other.id !== exceptId) {
+    throw fail(
+      409,
+      "name_taken",
+      `${other.status === "closed" ? "A closed" : "An active"} project already uses that name.`,
+    );
+  }
+}
 
 /** The project named by the input, locked, with its (active) workspace. */
 async function ownedProject(sql: Sql, userId: string, input: ManageProjectInput) {

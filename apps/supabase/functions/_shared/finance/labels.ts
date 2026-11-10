@@ -11,6 +11,7 @@ import {
   resolveWorkspace,
   type Row,
   type Sql,
+  transactionsUsing,
 } from "./common.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -37,20 +38,50 @@ const createCategory: Action<ManageCategoryInput> = async (sql, userId, input) =
 
 const updateCategory: Action<ManageCategoryInput> = async (sql, userId, input) => {
   const category = await ownedCategory(sql, userId, input);
+  const kind = input.kind ?? category.kind;
+  const kindChanged = kind !== category.kind;
+  const used = await transactionsUsing(sql, "category_id", category.id);
+  if (kindChanged) {
+    // Transactions and subcategories are tied to the kind, so it changes only while unused.
+    if (used > 0) {
+      throw fail(
+        409,
+        "category_in_use",
+        `${used} transaction(s) use this category, so its kind cannot change.`,
+      );
+    }
+    const [child] = await sql`
+      SELECT 1 FROM finance.categories WHERE parent_id = ${category.id} LIMIT 1`;
+    if (child) {
+      throw fail(409, "has_subcategories", "A category with subcategories cannot change kind.");
+    }
+  }
   if (input.parent_id) {
     if (input.parent_id === category.id) {
       throw fail(400, "same_category", "A category cannot be its own parent.");
     }
     const parent = await parentCategory(sql, category.workspace_id, input.parent_id);
-    if (parent.kind !== category.kind) throw kindMismatch(parent.kind);
+    if (parent.kind !== kind) throw kindMismatch(parent.kind);
     if (await hasSubcategories(sql, category.id)) {
       throw fail(409, "has_subcategories", "A category with subcategories must stay top-level.");
     }
+  } else if (kindChanged && input.parent_id === undefined && category.parent_id) {
+    // It would keep a parent of the old kind.
+    throw kindMismatch(category.kind);
   }
-  const changes = definedFields({ name: input.name, parent_id: input.parent_id });
+  const changes = definedFields({
+    name: input.name,
+    kind: input.kind,
+    parent_id: input.parent_id,
+  });
   await sql`
     UPDATE finance.categories SET ${sql(changes)}, updated_at = now() WHERE id = ${category.id}`;
-  return { status: "updated", category: await loadCategory(sql, category.id) };
+  const renamed = input.name !== undefined && input.name !== category.name;
+  return {
+    status: "updated",
+    category: await loadCategory(sql, category.id),
+    ...(renamed ? { transactions_using: used } : {}),
+  };
 };
 
 const archiveCategory: Action<ManageCategoryInput> = async (sql, userId, input) => {
@@ -60,22 +91,83 @@ const archiveCategory: Action<ManageCategoryInput> = async (sql, userId, input) 
   }
   await sql`
     UPDATE finance.categories SET archived_at = now(), updated_at = now() WHERE id = ${category.id}`;
-  return { status: "archived", category: { id: category.id, name: category.name } };
+  return {
+    status: "archived",
+    category: { id: category.id, name: category.name },
+    transactions_using: await transactionsUsing(sql, "category_id", category.id),
+  };
+};
+
+/** Brings an archived category back. Archived ones are not listed, so a name finds it too. */
+const restoreCategory: Action<ManageCategoryInput> = async (sql, userId, input) => {
+  if (!input.category_id && !input.name) {
+    throw required("category_id or name", "restore a category");
+  }
+  const workspace = input.category_id
+    ? null
+    : await resolveWorkspace(sql, userId, input.workspace_id);
+  const match = input.category_id
+    ? sql`c.id = ${input.category_id}`
+    : sql`c.workspace_id = ${workspace!.id} AND lower(c.name) = lower(${input.name!})
+        AND c.archived_at IS NOT NULL ${input.kind ? sql`AND c.kind = ${input.kind}` : sql``}`;
+  const [found] = await sql<
+    {
+      id: string;
+      name: string;
+      kind: string;
+      workspace_id: string;
+      parent_id: string | null;
+      archived_at: Date | null;
+    }[]
+  >`
+    SELECT c.id, c.name, c.kind, c.workspace_id, c.parent_id, c.archived_at
+    FROM finance.categories c
+    JOIN finance.workspaces w ON w.id = c.workspace_id AND w.owner_user_id = ${userId}
+      AND w.archived_at IS NULL
+    WHERE ${match} ORDER BY c.archived_at DESC LIMIT 1 FOR UPDATE OF c`;
+  if (!found) throw notFound("The archived category");
+  if (found.archived_at) {
+    const [taken] = await sql`
+      SELECT 1 FROM finance.categories
+      WHERE workspace_id = ${found.workspace_id} AND kind = ${found.kind}
+        AND lower(name) = lower(${found.name}) AND archived_at IS NULL`;
+    if (taken) {
+      throw fail(
+        409,
+        "name_taken",
+        `An active ${found.kind} category uses that name. Rename it before restoring this one.`,
+      );
+    }
+    if (found.parent_id) {
+      const [parent] = await sql<{ name: string; archived_at: Date | null }[]>`
+        SELECT name, archived_at FROM finance.categories WHERE id = ${found.parent_id} FOR UPDATE`;
+      if (parent.archived_at) {
+        throw fail(409, "parent_archived", `Restore its parent category ${parent.name} first.`);
+      }
+    }
+    await sql`
+      UPDATE finance.categories SET archived_at = NULL, updated_at = now() WHERE id = ${found.id}`;
+  }
+  return {
+    status: found.archived_at ? "restored" : "already_active",
+    category: await loadCategory(sql, found.id),
+  };
 };
 
 const CATEGORY_ACTIONS: Record<ManageCategoryInput["action"], Action<ManageCategoryInput>> = {
   create: createCategory,
   update: updateCategory,
   archive: archiveCategory,
+  restore: restoreCategory,
 };
 
 /** An active category in one of the caller's active workspaces, locked for the change. */
 async function ownedCategory(sql: Sql, userId: string, input: ManageCategoryInput) {
   if (!input.category_id) throw required("category_id", `${input.action} a category`);
   const [category] = await sql<
-    { id: string; name: string; kind: string; workspace_id: string }[]
+    { id: string; name: string; kind: string; workspace_id: string; parent_id: string | null }[]
   >`
-    SELECT c.id, c.name, c.kind, c.workspace_id FROM finance.categories c
+    SELECT c.id, c.name, c.kind, c.workspace_id, c.parent_id FROM finance.categories c
     JOIN finance.workspaces w ON w.id = c.workspace_id AND w.owner_user_id = ${userId}
       AND w.archived_at IS NULL
     WHERE c.id = ${input.category_id} AND c.archived_at IS NULL FOR UPDATE OF c`;
@@ -140,13 +232,58 @@ const updatePayee: Action<ManagePayeeInput> = async (sql, userId, input) => {
   const [updated] = await sql<Row[]>`
     UPDATE finance.payees SET ${sql(changes)}, updated_at = now() WHERE id = ${payee.id}
     RETURNING id, name, default_category_id`;
-  return { status: "updated", payee: compact(updated) };
+  const renamed = input.name !== undefined && input.name !== payee.name;
+  return {
+    status: "updated",
+    payee: compact(updated),
+    ...(renamed ? { transactions_using: await transactionsUsing(sql, "payee_id", payee.id) } : {}),
+  };
 };
 
 const archivePayee: Action<ManagePayeeInput> = async (sql, userId, input) => {
   const payee = await ownedPayee(sql, userId, input);
   await sql`UPDATE finance.payees SET archived_at = now(), updated_at = now() WHERE id = ${payee.id}`;
-  return { status: "archived", payee: { id: payee.id, name: payee.name } };
+  return {
+    status: "archived",
+    payee: { id: payee.id, name: payee.name },
+    transactions_using: await transactionsUsing(sql, "payee_id", payee.id),
+  };
+};
+
+/** Brings an archived payee back. Archived ones are not listed, so a name finds it too. */
+const restorePayee: Action<ManagePayeeInput> = async (sql, userId, input) => {
+  if (!input.payee_id && !input.name) throw required("payee_id or name", "restore a payee");
+  const workspace = input.payee_id ? null : await resolveWorkspace(sql, userId, input.workspace_id);
+  const match = input.payee_id
+    ? sql`p.id = ${input.payee_id}`
+    : sql`p.workspace_id = ${workspace!.id} AND lower(p.name) = lower(${input.name!})
+        AND p.archived_at IS NOT NULL`;
+  const [found] = await sql<
+    { id: string; name: string; workspace_id: string; archived_at: Date | null }[]
+  >`
+    SELECT p.id, p.name, p.workspace_id, p.archived_at FROM finance.payees p
+    JOIN finance.workspaces w ON w.id = p.workspace_id AND w.owner_user_id = ${userId}
+      AND w.archived_at IS NULL
+    WHERE ${match} ORDER BY p.archived_at DESC LIMIT 1 FOR UPDATE OF p`;
+  if (!found) throw notFound("The archived payee");
+  if (found.archived_at) {
+    const [taken] = await sql`
+      SELECT 1 FROM finance.payees
+      WHERE workspace_id = ${found.workspace_id} AND lower(name) = lower(${found.name})
+        AND archived_at IS NULL`;
+    if (taken) {
+      throw fail(
+        409,
+        "name_taken",
+        "An active payee uses that name. Merge or rename it before restoring this one.",
+      );
+    }
+    await sql`
+      UPDATE finance.payees SET archived_at = NULL, updated_at = now() WHERE id = ${found.id}`;
+  }
+  const [payee] = await sql<Row[]>`
+    SELECT id, name, default_category_id FROM finance.payees WHERE id = ${found.id}`;
+  return { status: found.archived_at ? "restored" : "already_active", payee: compact(payee) };
 };
 
 /** Moves every transaction of a duplicate payee onto another one and archives the duplicate. */
@@ -181,6 +318,7 @@ const PAYEE_ACTIONS: Record<ManagePayeeInput["action"], Action<ManagePayeeInput>
   create: createPayee,
   update: updatePayee,
   archive: archivePayee,
+  restore: restorePayee,
   merge: mergePayee,
 };
 

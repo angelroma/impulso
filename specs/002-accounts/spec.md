@@ -108,6 +108,14 @@ with the same categories and payees by name.
 - **FR-009**: A user MUST be able to move an account with all its transactions to another of
   their workspaces, mapping categories and payees by name and clearing project links.
 - **FR-010**: An account involved in transfers MUST NOT be moved.
+- **FR-011**: A user MUST be able to restore an archived account. Restoring is refused while
+  another active account in the workspace uses its name. It becomes the default only if the
+  workspace has no other active account.
+- **FR-012**: Context MUST include the total balance of active accounts per currency. The total
+  is computed on every read from the same formula as FR-004 and is never stored.
+- **FR-013**: When a transaction leaves a card or loan balance above zero, it is still recorded
+  and the reply MUST say so, so the assistant can ask the user whether it is an overpayment or
+  the balance needs correcting.
 
 ### Key Entities
 
@@ -130,18 +138,26 @@ with the same categories and payees by name.
   (see 005).
 - Balances are not converted between currencies.
 
-## Open Questions
+## Clarifications
 
-- **No unarchive**: an archived account cannot be restored through the tools. Intended?
-- **Liability balance over time**: only the opening balance of a card or loan is checked; later
-  transactions can push it positive. Acceptable (overpayment), or should it warn?
-- **Total across accounts**: context lists each balance but no net worth. Wanted?
+### Session 2026-11-09
+
+- Q: Should an archived account be restorable? → A: Yes, on request.
+- Q: How are card and loan balances kept right? → A: A payment to a card or loan is a transfer
+  from the account that paid, so both balances change and the paying account is always known.
+  A purchase made with the card is an expense on the card. This is how it works today.
+- Q: Is a total across accounts wanted? → A: Yes, but it must never drift from the account
+  balances.
+- Q: Should the user be told when a card or loan balance goes above zero? → A: Yes. Card and
+  loan balances are hard to keep in sync, and the user may need to clarify something.
 
 ## Implementation Reference
 
-- Tool: `manage_account` (create, update, archive, move)
-- Code: `apps/supabase/functions/_shared/finance/accounts.ts`, `common.ts` (`accountBalances`,
+- Tool: `manage_account` (create, update, archive, restore, move)
+- Code: `apps/supabase/functions/_shared/finance/accounts.ts`, `common.ts` (`accountBalances`, `balanceTotals`, `liabilityNotices`,
   `activeAccount`, `mapCategory`, `mapPayee`)
 - Schema: `apps/supabase/schemas/finance/tables/accounts.sql`, `account_types.sql`
 - Tests: `functions/tests/integration_test.ts` ("Guards keep debts negative…", "Transactions and
-  accounts move between independent workspaces"), `tests/database/impulso_schema.test.sql`
+  accounts move between independent workspaces",
+  "Restores and notices tell the user what a change affects"),
+  `tests/database/impulso_schema.test.sql`

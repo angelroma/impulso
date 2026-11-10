@@ -56,6 +56,18 @@ Deno.test("transaction edits can clear optional links with null", () => {
   );
 });
 
+Deno.test("archived records can be restored by name and summaries group by top-level category", () => {
+  for (const tool of ["manage_workspace", "manage_account", "manage_category", "manage_payee"]) {
+    const { input } = FINANCE_TOOLS[tool as keyof typeof FINANCE_TOOLS];
+    assert.ok(input.safeParse({ action: "restore", name: "Efectivo" }).success, tool);
+  }
+  assert.equal(
+    FINANCE_TOOLS.manage_project.input.safeParse({ action: "restore", name: "x" }).success,
+    false,
+  );
+  assert.ok(FINANCE_TOOLS.get_summary.input.safeParse({ group_by: "top_category" }).success);
+});
+
 Deno.test("every tool has a short description and a closed input", () => {
   for (const [name, tool] of Object.entries(FINANCE_TOOLS)) {
     assert.ok(tool.description.length <= 300, `${name} description must stay short`);

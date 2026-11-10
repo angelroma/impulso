@@ -1,6 +1,16 @@
 // Read-only views: transaction listing and period summaries.
 import type { GetSummaryInput, ListTransactionsInput } from "../finance_contracts.ts";
-import { compact, fail, resolveWorkspace, type Row, type Sql, today } from "./common.ts";
+import {
+  compact,
+  fail,
+  resolveWorkspace,
+  type Row,
+  type Sql,
+  today,
+  withNotices,
+} from "./common.ts";
+
+const MAX_GROUPS = 100;
 
 export async function listTransactions(sql: Sql, userId: string, input: ListTransactionsInput) {
   const workspace = await resolveWorkspace(sql, userId, input.workspace_id);
@@ -41,7 +51,12 @@ export async function listTransactions(sql: Sql, userId: string, input: ListTran
       ${input.payee_id ? sql`AND t.payee_id = ${input.payee_id}` : sql``}
       ${input.project_id ? sql`AND t.project_id = ${input.project_id}` : sql``}
       ${input.kind ? sql`AND t.kind = ${input.kind}` : sql``}
-      ${pattern ? sql`AND (p.name ILIKE ${pattern} OR t.notes ILIKE ${pattern})` : sql``}
+      ${
+    pattern
+      ? sql`AND (p.name ILIKE ${pattern} OR t.notes ILIKE ${pattern} OR c.name ILIKE ${pattern}
+          OR a.name ILIKE ${pattern} OR ta.name ILIKE ${pattern})`
+      : sql``
+  }
       ${cursorFilter}
     ORDER BY t.occurred_on DESC, t.id DESC
     LIMIT ${limit + 1}`;
@@ -82,6 +97,7 @@ export async function getSummary(sql: Sql, userId: string, input: GetSummaryInpu
   const byCategory = input.group_by === "category";
   const key = {
     category: sql`c.name`,
+    top_category: sql`COALESCE(pc.name, c.name)`,
     payee: sql`p.name`,
     project: sql`pr.name`,
     account: sql`a.name`,
@@ -96,6 +112,17 @@ export async function getSummary(sql: Sql, userId: string, input: GetSummaryInpu
     ${base}
     GROUP BY 1, ${byCategory ? sql`pc.name,` : sql``} a.currency
     ORDER BY ${order}
-    LIMIT 100`;
-  return { workspace: workspace.name, from, to, totals, groups: groups.map(compact) };
+    LIMIT ${MAX_GROUPS + 1}`;
+  return withNotices(
+    {
+      workspace: workspace.name,
+      from,
+      to,
+      totals,
+      groups: groups.slice(0, MAX_GROUPS).map(compact),
+    },
+    groups.length > MAX_GROUPS
+      ? [`Only the first ${MAX_GROUPS} groups are shown; narrow the period.`]
+      : [],
+  );
 }

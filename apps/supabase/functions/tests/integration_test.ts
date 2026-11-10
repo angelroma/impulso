@@ -466,6 +466,288 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
       await expectError("get_context", { workspace_id: crypto.randomUUID() }, "not_found");
     });
 
+    await test.step("Restores and notices tell the user what a change affects", async () => {
+      const messageOf = async (name: FinanceToolName, input: Record<string, unknown>) => {
+        try {
+          await call(name, input);
+        } catch (error) {
+          assert(error instanceof ApiError, `${name} must fail with an API error.`);
+          return `${error.code}: ${error.message}`;
+        }
+        throw new Error(`${name} unexpectedly succeeded.`);
+      };
+      const cents = (value: string) => BigInt(value.replace(".", ""));
+      const context = await call("get_context", {});
+      const [bbva, cash] = context.accounts;
+      assert(
+        context.totals.length === 1 && context.totals[0].currency === "MXN" &&
+          context.totals[0].accounts === 2 &&
+          cents(context.totals[0].balance) === cents(bbva.balance) + cents(cash.balance),
+        "The context total must equal the sum of the account balances.",
+      );
+
+      // Accounts: restore by name, then a payment that overshoots a card raises a notice.
+      const card = await call("manage_account", { action: "restore", name: "tarjeta nu" });
+      const cardAgain = await call("manage_account", {
+        action: "restore",
+        account_id: card.account.id,
+      });
+      assert(
+        card.status === "restored" && card.account.balance === "-5000.00" &&
+          cardAgain.status === "already_active",
+        "An archived account must be restorable by name, once.",
+      );
+      const overpaid = await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "transfer",
+        amount: "6000",
+        to_account_id: card.account.id,
+      });
+      assert(
+        overpaid.notices?.length === 1 && /Tarjeta Nu .*above zero \(1000\.00 MXN\)/.test(
+          overpaid.notices[0],
+        ),
+        "A card balance above zero must be reported.",
+      );
+      const undone = await call("update_transaction", {
+        action: "delete",
+        transaction_id: overpaid.transaction.id,
+      });
+      assert(!("notices" in undone), "A card back below zero raises no notice.");
+
+      // Categories: kind changes only while unused; renames and archives report usage.
+      const gift = await call("manage_category", {
+        action: "create",
+        name: "Prueba tipo",
+        kind: "expense",
+      });
+      const flipped = await call("manage_category", {
+        action: "update",
+        category_id: gift.category.id,
+        kind: "income",
+      });
+      assert(flipped.category.kind === "income", "An unused category can change kind.");
+      await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "income",
+        amount: "5",
+        category_id: gift.category.id,
+      });
+      assert(
+        /^category_in_use: 1 transaction/.test(
+          await messageOf("manage_category", {
+            action: "update",
+            category_id: gift.category.id,
+            kind: "expense",
+          }),
+        ),
+        "A used category must keep its kind and say how many transactions use it.",
+      );
+      const byCategory = await call("list_transactions", { search: "prueba tipo" });
+      const byAccount = await call("list_transactions", { search: "efectivo" });
+      assert(
+        byCategory.transactions.length === 1 && byAccount.transactions.length >= 1,
+        "Search must match category and account names.",
+      );
+      const renamed = await call("manage_category", {
+        action: "update",
+        category_id: gift.category.id,
+        name: "Prueba renombrada",
+      });
+      const archived = await call("manage_category", {
+        action: "archive",
+        category_id: gift.category.id,
+      });
+      assert(
+        renamed.transactions_using === 1 && archived.transactions_using === 1,
+        "Renaming or archiving a category must say how many transactions use it.",
+      );
+      const twin = await call("manage_category", {
+        action: "create",
+        name: "prueba renombrada",
+        kind: "income",
+      });
+      await expectError(
+        "manage_category",
+        { action: "restore", name: "Prueba renombrada" },
+        "name_taken",
+      );
+      await call("manage_category", {
+        action: "update",
+        category_id: twin.category.id,
+        name: "Prueba gemela",
+      });
+      const restored = await call("manage_category", {
+        action: "restore",
+        name: "prueba renombrada",
+      });
+      assert(
+        restored.status === "restored" && restored.category.id === gift.category.id,
+        "An archived category must be restorable by name.",
+      );
+      const parent = await call("manage_category", {
+        action: "create",
+        name: "Prueba padre",
+        kind: "expense",
+      });
+      const child = await call("manage_category", {
+        action: "create",
+        name: "Prueba hija",
+        parent_id: parent.category.id,
+      });
+      await expectError("manage_category", {
+        action: "update",
+        category_id: parent.category.id,
+        kind: "income",
+      }, "has_subcategories");
+      await expectError("manage_category", {
+        action: "update",
+        category_id: child.category.id,
+        kind: "income",
+      }, "category_kind_mismatch");
+      await call("manage_category", { action: "archive", category_id: child.category.id });
+      await call("manage_category", { action: "archive", category_id: parent.category.id });
+      await expectError("manage_category", {
+        action: "restore",
+        category_id: child.category.id,
+      }, "parent_archived");
+
+      // Payees: usage counts, restore by name, and a suggested category on a payee change.
+      const uber = context.payees.find((row: { name: string }) => row.name === "Uber");
+      const payeeArchived = await call("manage_payee", { action: "archive", payee_id: uber.id });
+      const payeeRestored = await call("manage_payee", { action: "restore", name: "uber" });
+      const payeeRenamed = await call("manage_payee", {
+        action: "update",
+        payee_id: uber.id,
+        name: "Uber Eats",
+      });
+      assert(
+        payeeArchived.transactions_using === 1 && payeeRestored.status === "restored" &&
+          payeeRestored.payee.id === uber.id && payeeRenamed.transactions_using === 1,
+        "Payees must report usage and be restorable by name.",
+      );
+      const { transactions: rides } = await call("list_transactions", { search: "uber eats" });
+      const repaid = await call("update_transaction", {
+        action: "edit",
+        transaction_id: rides[0].id,
+        payee: "Oxxo",
+      });
+      assert(
+        repaid.suggested_category?.name === "Comida" && !("category" in repaid.transaction),
+        "A changed payee must suggest its default category without applying it.",
+      );
+
+      // A request_id reused for something else is not recorded and is reported.
+      const original = { request_id: crypto.randomUUID(), kind: "expense", amount: "10" };
+      await call("record_transaction", original);
+      const same = await call("record_transaction", original);
+      const different = await call("record_transaction", { ...original, amount: "11" });
+      assert(
+        !("notices" in same) && different.status === "already_processed" &&
+          different.transaction.amount === "10.00" &&
+          /differs in: amount\)/.test(different.notices[0]),
+        "A reused request_id with other values must be reported, not recorded.",
+      );
+
+      // Projects: name clashes say which project holds the name; transfers and other
+      // currencies do not count and are reported.
+      const loan = await call("manage_project", { action: "create", name: "Préstamo Ana" });
+      assert(
+        /^name_taken: An active project/.test(
+          await messageOf("manage_project", { action: "create", name: "préstamo ana" }),
+        ) &&
+          /^name_taken: A closed project/.test(
+            await messageOf("manage_project", {
+              action: "update",
+              project_id: loan.project.id,
+              name: "viaje japón",
+            }),
+          ),
+        "A taken project name must say whether its project is active or closed.",
+      );
+      const tagged = await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "transfer",
+        amount: "5",
+        to_account_id: cash.id,
+        project_id: loan.project.id,
+      });
+      assert(
+        tagged.notices?.some((notice: string) => /Transfers do not count/.test(notice)),
+        "A transfer tagged to a project must be reported as not counting.",
+      );
+      const dollars = await call("manage_account", {
+        action: "create",
+        name: "Dólares",
+        currency: "USD",
+      });
+      await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "20",
+        account_id: dollars.account.id,
+        project_id: loan.project.id,
+      });
+      const after = await call("get_context", {});
+      const progress = after.projects.find((row: { id: string }) => row.id === loan.project.id);
+      assert(
+        progress.spent === "0.00" && progress.excluded.length === 1 &&
+          progress.excluded[0].currency === "USD" && progress.excluded[0].count === 1 &&
+          progress.excluded[0].spent === "20.00" && after.totals.length === 2,
+        "Other-currency transactions stay out of spent and are reported apart.",
+      );
+
+      // Summaries can add subcategories into their parent.
+      const food = after.categories.find((row: { name: string; parent?: string }) =>
+        row.name === "Comida" && row.parent === "Hogar"
+      );
+      await call("record_transaction", {
+        request_id: crypto.randomUUID(),
+        kind: "expense",
+        amount: "40",
+        category_id: food.id,
+        date: "2026-11-05",
+      });
+      const summary = await call("get_summary", {
+        from: "2026-11-05",
+        to: "2026-11-05",
+        group_by: "top_category",
+      });
+      assert(
+        summary.groups.length === 1 && summary.groups[0].key === "Hogar" &&
+          summary.groups[0].expense === "40.00" && !("notices" in summary),
+        "top_category must add a subcategory into its parent.",
+      );
+
+      // Workspaces: archiving says what it hides and can be undone by name.
+      const temporary = await call("manage_workspace", {
+        action: "create",
+        name: "Temporal",
+        currency: "MXN",
+        timezone: "America/Mexico_City",
+      });
+      await call("manage_account", {
+        action: "create",
+        workspace_id: temporary.workspace.id,
+        name: "Caja",
+      });
+      const hidden = await call("manage_workspace", {
+        action: "archive",
+        workspace_id: temporary.workspace.id,
+      });
+      const back = await call("manage_workspace", { action: "restore", name: "temporal" });
+      const backAgain = await call("manage_workspace", {
+        action: "restore",
+        workspace_id: temporary.workspace.id,
+      });
+      assert(
+        hidden.hidden.accounts === 1 && hidden.hidden.transactions === 0 &&
+          back.status === "restored" && back.workspace.id === temporary.workspace.id &&
+          backAgain.status === "already_active",
+        "Archiving a workspace must say what it hides and be reversible.",
+      );
+    });
+
     await test.step("Signing out invalidates reuse of the same access token", async () => {
       const signedOut = await client.auth.signOut({ scope: "local" });
       assert(!signedOut.error, "Signing out the disposable account failed.");

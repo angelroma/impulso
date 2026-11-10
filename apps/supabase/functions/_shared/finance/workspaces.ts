@@ -2,6 +2,7 @@ import type { GetContextInput, ManageWorkspaceInput } from "../finance_contracts
 import {
   accountBalances,
   type Action,
+  balanceTotals,
   compact,
   definedFields,
   fail,
@@ -46,6 +47,7 @@ export async function getContext(sql: Sql, userId: string, input: GetContextInpu
     workspaces: workspaces.map(({ id, name, is_default }) => ({ id, name, is_default })),
     workspace: { ...selected, today: await today(sql, selected.timezone) },
     accounts,
+    totals: await balanceTotals(sql, selected.id),
     categories: categories.map(compact),
     payees: payees.map(compact),
     projects,
@@ -126,13 +128,60 @@ const archiveWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input
   await sql`
     UPDATE finance.workspaces SET archived_at = now(), is_default = false, updated_at = now()
     WHERE id = ${workspace.id}`;
-  return { status: "archived", workspace: { id: workspace.id, name: workspace.name } };
+  const [hidden] = await sql<{ accounts: number; transactions: number }[]>`
+    SELECT
+      (SELECT count(*)::int FROM finance.accounts
+        WHERE workspace_id = ${workspace.id} AND archived_at IS NULL) AS accounts,
+      (SELECT count(*)::int FROM finance.transactions
+        WHERE workspace_id = ${workspace.id} AND deleted_at IS NULL) AS transactions`;
+  return {
+    status: "archived",
+    workspace: { id: workspace.id, name: workspace.name },
+    hidden,
+    restorable: true,
+  };
+};
+
+/** Brings an archived workspace back; it is found by id or, failing that, by name. */
+const restoreWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input) => {
+  if (!input.workspace_id && !input.name) {
+    throw required("workspace_id or name", "restore a workspace");
+  }
+  const match = input.workspace_id
+    ? sql`id = ${input.workspace_id}`
+    : sql`lower(name) = lower(${input.name!}) AND archived_at IS NOT NULL`;
+  const [found] = await sql<{ id: string; name: string; archived_at: Date | null }[]>`
+    SELECT id, name, archived_at FROM finance.workspaces
+    WHERE owner_user_id = ${userId} AND ${match}
+    ORDER BY archived_at DESC LIMIT 1 FOR UPDATE`;
+  if (!found) throw notFound("The archived workspace");
+  const active = await sql<{ id: string; name: string }[]>`
+    SELECT id, name FROM finance.workspaces
+    WHERE owner_user_id = ${userId} AND archived_at IS NULL`;
+  if (found.archived_at) {
+    if (active.some((other) => other.name.toLowerCase() === found.name.toLowerCase())) {
+      throw fail(
+        409,
+        "name_taken",
+        "An active workspace uses that name. Rename it before restoring this one.",
+      );
+    }
+    await sql`
+      UPDATE finance.workspaces
+      SET archived_at = NULL, is_default = ${active.length === 0}, updated_at = now()
+      WHERE id = ${found.id}`;
+  }
+  return {
+    status: found.archived_at ? "restored" : "already_active",
+    workspace: await resolveWorkspace(sql, userId, found.id),
+  };
 };
 
 const WORKSPACE_ACTIONS: Record<ManageWorkspaceInput["action"], Action<ManageWorkspaceInput>> = {
   create: createWorkspace,
   update: updateWorkspace,
   archive: archiveWorkspace,
+  restore: restoreWorkspace,
 };
 
 /** The workspace named by the input, locked for the change. */

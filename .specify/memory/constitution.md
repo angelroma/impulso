@@ -1,14 +1,14 @@
 <!--
 Sync Impact Report
-- Version: 1.0.0 -> 1.1.0 (MINOR: Principle I materially expanded)
-- Modified principles: I. Minimal Model (six application tables plus five reference tables;
-  rule for enumerated values added)
+- Version: 1.1.0 -> 1.2.0 (MINOR: language rule and Principle I scope materially changed)
+- Modified principles: I. Minimal Model (any Google user, each with an isolated space, instead
+  of a single user; category merging and cross-currency transfers added to rejected features)
+- Modified sections: Technology and Language Constraints (default categories are seeded in
+  Mexican Spanish)
 - Added sections: none
 - Removed sections: none
 - Templates: plan-template.md, spec-template.md, tasks-template.md need no change
-- Follow-ups: specs/001-workspaces flags that the default categories are in Spanish while
-  "System-generated defaults are in English" (Technology and Language Constraints); the user
-  decides whether to amend the rule or the seed.
+- Follow-ups: none. Source: user decisions recorded as Clarifications in specs 001-007.
 -->
 
 # Impulso Constitution
@@ -17,7 +17,8 @@ Sync Impact Report
 
 ### I. Minimal Model
 
-Impulso serves a single user and MUST stay as small as that user's real needs.
+Impulso is a personal ledger. Anyone may sign in with Google and gets their own isolated space;
+the model MUST stay as small as one person's real needs.
 
 - The schema contains only tables the user actively uses. Today that is six application
   tables (workspaces, accounts, categories, payees, projects and transactions) and five
@@ -31,8 +32,8 @@ Impulso serves a single user and MUST stay as small as that user's real needs.
   that names the user need it serves.
 - Features the user has explicitly rejected MUST NOT be reintroduced unless the user asks for
   them again: recurring transactions, separate transfer rows or `transfer_id`, a cleared flag,
-  tags, category budgets, Google Sheets export, Health, people or sharing tables, and guided
-  onboarding.
+  tags, category budgets, merging categories, transfers between currencies, Google Sheets
+  export, Health, people or sharing tables, and guided onboarding.
 - When two designs meet the requirement, choose the one with fewer objects and fewer
   concepts.
 
@@ -117,8 +118,9 @@ and a schema/migration match. That bar stays.
 - PostgreSQL identifiers and enum or state values use English `snake_case`. Code follows its
   framework's naming conventions in English.
 - User-provided names, aliases, descriptions, notes and documents keep their original language
-  and content. System-generated defaults are in English. The brand names Impulso and @Impulso are
-  unchanged.
+  and content. The default categories seeded into a new workspace are user-facing data and are
+  in Mexican Spanish; other system-generated defaults are in English. The brand names Impulso
+  and @Impulso are unchanged.
 
 ## Development Workflow
 
@@ -146,4 +148,4 @@ CLAUDE.md hold runtime guidance for agents and MUST stay consistent with it.
 - Every plan and every review MUST verify compliance with the Core Principles. Added complexity
   MUST be justified in writing.
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-09
+**Version**: 1.2.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-09

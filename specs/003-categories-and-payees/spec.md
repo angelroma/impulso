@@ -108,6 +108,16 @@ from context.
 - **FR-008**: Categories and payees belong to one workspace and MUST NOT be used from another.
 - **FR-009**: Archived categories and payees MUST remain on existing transactions and MUST NOT
   be offered for new ones.
+- **FR-010**: `kind` sent with a category update MUST NOT be ignored. The change is applied only
+  when no transaction and no subcategory uses the category; otherwise it is refused and the
+  reply says how many transactions use it.
+- **FR-011**: The reply to archiving or renaming a category or payee MUST say how many
+  transactions use it.
+- **FR-012**: A user MUST be able to restore an archived category or payee. Restoring is refused
+  while an active one uses its name, and for a subcategory while its parent is archived.
+- **FR-013**: When an edit changes a transaction's payee and leaves its category alone, the
+  reply MUST include the new payee's default category as a suggestion, so the assistant can ask
+  the user whether to apply it.
 
 ### Key Entities
 
@@ -124,26 +134,32 @@ from context.
 
 ## Assumptions
 
-- Tags and category budgets were rejected and are out of scope.
+- Tags, category budgets and merging categories were rejected and are out of scope.
 - The assistant, not the system, decides which category a new payee should get; it then saves
   it as that payee's default.
 
-## Open Questions
+## Clarifications
 
-- **Changing a category's kind**: `kind` sent with an update is ignored without an error.
-  Refuse it, or allow the change when no transaction uses the category?
-- **No unarchive** for categories or payees. Intended?
-- **Merging categories**: payees can be merged, categories cannot. Wanted?
-- **Default category on later edits**: the payee default applies only when a transaction is
-  first recorded, not when its payee is changed later. Intended?
+### Session 2026-11-09
+
+- Q: What happens when a category that other records use is changed? → A: The user must be told
+  what the change affects; such changes are risky and must never be silent.
+- Q: Should archived categories and payees be restorable? → A: Yes.
+- Q: Should categories be mergeable? → A: No.
+- Q: Should a payee's default category be applied when a transaction's payee is changed later?
+  → A: Not automatically. The assistant picks the category that fits the operation and confirms
+  it with the user. Every reply ends with a short summary of what was done, so the user can ask
+  for a correction.
 
 ## Implementation Reference
 
-- Tools: `manage_category` (create, update, archive), `manage_payee` (create, update, archive,
-  merge)
+- Tools: `manage_category` (create, update, archive, restore), `manage_payee` (create, update,
+  archive, restore, merge)
 - Code: `apps/supabase/functions/_shared/finance/labels.ts`, `common.ts` (`payeeByName`,
   `activeCategory`)
 - Schema: `apps/supabase/schemas/finance/tables/categories.sql`, `payees.sql`,
   `category_kinds.sql`
 - Tests: `functions/tests/integration_test.ts` ("A new user sets up workspaces, accounts,
-  categories and payees"), `tests/database/impulso_schema.test.sql`
+  categories and payees",
+  "Restores and notices tell the user what a change affects"),
+  `tests/database/impulso_schema.test.sql`

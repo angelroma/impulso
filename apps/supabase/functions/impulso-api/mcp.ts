@@ -24,6 +24,7 @@ const INSTRUCTIONS = [
   "Be brief: reply in the user's language in one or two lines. Do not show reviews or ask for " +
   "confirmation when the request is clear; act and report the result in one line (amount, payee, " +
   "category, account, new balance).",
+  "When a reply has notices or suggested_category, tell the user in one line and ask if needed.",
   "When something is missing or ambiguous, ask one short question and offer the matching options " +
   "from get_context as a short numbered list (or the client's choice buttons). Never explain internals.",
   "Amounts are decimal strings. Use the workspace currency; never convert or guess another one.",

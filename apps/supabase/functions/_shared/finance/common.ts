@@ -237,26 +237,81 @@ export async function mapPayee(sql: Sql, payeeId: string | null, targetWorkspace
   return (await payeeByName(sql, targetWorkspaceId, source.name)).id;
 }
 
-/** Balance = opening balance + income - expenses - transfers out + transfers in. */
-export async function accountBalances(sql: Sql, workspaceId: string, accountId?: string) {
-  const only = accountId ? sql`AND a.id = ${accountId}` : sql``;
-  return await sql<Row[]>`
+/**
+ * Balance = opening balance + income - expenses - transfers out + transfers in, for the active
+ * accounts of a workspace. Every balance and total is read through this one query, so they
+ * cannot drift apart.
+ */
+function balanceRows(sql: Sql, workspaceId: string, accountIds?: string[]) {
+  const only = accountIds ? sql`AND a.id IN ${sql(accountIds)}` : sql``;
+  return sql`
     SELECT a.id, a.name, a.type, a.currency, a.is_default,
-      (a.opening_balance + COALESCE(SUM(
+      a.opening_balance + COALESCE(SUM(
         CASE
           WHEN t.kind = 'income' AND t.account_id = a.id THEN t.amount
           WHEN t.account_id = a.id THEN -t.amount
           WHEN t.to_account_id = a.id THEN t.amount
-        END), 0))::text AS balance
+        END), 0) AS balance
     FROM finance.accounts a
     LEFT JOIN finance.transactions t ON t.workspace_id = a.workspace_id AND t.deleted_at IS NULL
       AND (t.account_id = a.id OR t.to_account_id = a.id)
     WHERE a.workspace_id = ${workspaceId} AND a.archived_at IS NULL ${only}
-    GROUP BY a.id
-    ORDER BY a.is_default DESC, lower(a.name)`;
+    GROUP BY a.id`;
 }
 
-/** Spent = expenses - refunds; remaining = budget - spent. Counts accounts in `currency` only. */
+export async function accountBalances(sql: Sql, workspaceId: string, accountId?: string) {
+  return await sql<Row[]>`
+    SELECT b.id, b.name, b.type, b.currency, b.is_default, b.balance::text AS balance
+    FROM (${balanceRows(sql, workspaceId, accountId ? [accountId] : undefined)}) b
+    ORDER BY b.is_default DESC, lower(b.name)`;
+}
+
+/** The sum of the active account balances per currency; computed on read, never stored. */
+export async function balanceTotals(sql: Sql, workspaceId: string) {
+  return await sql<Row[]>`
+    SELECT b.currency, SUM(b.balance)::text AS balance, count(*)::int AS accounts
+    FROM (${balanceRows(sql, workspaceId)}) b GROUP BY b.currency ORDER BY b.currency`;
+}
+
+/** One notice per card or loan among `accountIds` whose balance is above zero. */
+export async function liabilityNotices(
+  sql: Sql,
+  workspaceId: string,
+  accountIds: (string | null)[],
+): Promise<string[]> {
+  const ids = accountIds.filter((id): id is string => id !== null);
+  if (ids.length === 0) return [];
+  const rows = await sql<{ name: string; balance: string; currency: string }[]>`
+    SELECT b.name, b.balance::text AS balance, b.currency
+    FROM (${balanceRows(sql, workspaceId, ids)}) b
+    JOIN finance.account_types ty ON ty.code = b.type AND ty.is_liability
+    WHERE b.balance > 0 ORDER BY lower(b.name)`;
+  return rows.map((row) =>
+    `${row.name} is a card or loan and its balance is now above zero ` +
+    `(${row.balance} ${row.currency}): check whether it is an overpayment or needs correcting.`
+  );
+}
+
+/** How many transactions (deleted ones included) carry a category or payee. */
+export async function transactionsUsing(
+  sql: Sql,
+  column: "category_id" | "payee_id",
+  id: string,
+): Promise<number> {
+  const [{ count }] = await sql<{ count: number }[]>`
+    SELECT count(*)::int AS count FROM finance.transactions WHERE ${sql(column)} = ${id}`;
+  return count;
+}
+
+/** Adds `notices` to a reply only when there is something to tell the user. */
+export function withNotices(reply: Row, notices: string[]): Row {
+  return notices.length > 0 ? { ...reply, notices } : reply;
+}
+
+/**
+ * Spent = expenses - refunds; remaining = budget - spent. Counts accounts in `currency` only;
+ * tagged transactions in other currencies are reported apart in `excluded`.
+ */
 export async function projectProgress(
   sql: Sql,
   workspaceId: string,
@@ -264,19 +319,34 @@ export async function projectProgress(
   activeOnly: boolean,
 ) {
   const status = activeOnly ? sql`AND pr.status = 'active'` : sql``;
+  const excluded = await sql<
+    { project_id: string; currency: string; count: number; spent: string }[]
+  >`
+    SELECT t.project_id, a.currency, count(*)::int AS count,
+      (COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'expense'), 0.00)
+        - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0.00))::text AS spent
+    FROM finance.transactions t
+    JOIN finance.accounts a ON a.id = t.account_id AND a.currency <> ${currency}
+    WHERE t.workspace_id = ${workspaceId} AND t.project_id IS NOT NULL AND t.deleted_at IS NULL
+      AND t.kind <> 'transfer'
+    GROUP BY t.project_id, a.currency ORDER BY a.currency`;
   const rows = await sql<Row[]>`
     SELECT pr.id, pr.name, pr.status, pr.budget::text AS budget,
       pr.start_date::text AS start_date, pr.end_date::text AS end_date,
-      (COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'expense'), 0)
-        - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0))::text AS spent,
-      (pr.budget - (COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'expense'), 0)
-        - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0)))::text AS remaining
+      (COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'expense'), 0.00)
+        - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0.00))::text AS spent,
+      (pr.budget - (COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'expense'), 0.00)
+        - COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'income'), 0.00)))::text AS remaining
     FROM finance.projects pr
     LEFT JOIN finance.transactions t ON t.project_id = pr.id AND t.deleted_at IS NULL
       AND EXISTS (SELECT 1 FROM finance.accounts a WHERE a.id = t.account_id AND a.currency = ${currency})
     WHERE pr.workspace_id = ${workspaceId} ${status}
     GROUP BY pr.id ORDER BY lower(pr.name)`;
-  return rows.map(compact);
+  return rows.map((row) => {
+    const apart = excluded.filter((other) => other.project_id === row.id)
+      .map(({ currency, count, spent }) => ({ currency, count, spent }));
+    return apart.length > 0 ? { ...compact(row), excluded: apart } : compact(row);
+  });
 }
 
 /** One transaction with names instead of ids, ready to show the user. */
