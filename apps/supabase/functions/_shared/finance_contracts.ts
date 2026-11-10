@@ -138,6 +138,13 @@ export const getSummaryInput = z.object({
   to: date.optional().describe("Defaults to today."),
   group_by: z.enum(["category", "top_category", "payee", "project", "account", "month"])
     .optional().describe("top_category adds subcategories into their parent."),
+  statement: z.boolean().optional().describe(
+    "true returns the period report instead of totals: the balance carried over from before " +
+      "`from`, every transaction oldest first with a running balance, and the closing balance.",
+  ),
+  account_id: uuid.optional().describe(
+    "With statement: report one account only. Omit for all active accounts together.",
+  ),
 }).strict();
 
 export type GetContextInput = z.infer<typeof getContextInput>;
@@ -230,7 +237,9 @@ export const FINANCE_TOOLS = {
     input: getSummaryInput,
     description:
       "Totals of income, expense and net for a period, optionally grouped by category, top-level " +
-      "category, payee, project, account or month. Defaults to the current month.",
+      "category, payee, project, account or month. Defaults to the current month. For a report " +
+      "set statement: true: balance carried over, each transaction by date with a running " +
+      "balance, and the closing balance.",
   },
 } as const;
 

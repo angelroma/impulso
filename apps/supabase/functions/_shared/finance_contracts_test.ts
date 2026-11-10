@@ -66,6 +66,15 @@ Deno.test("archived records can be restored by name and summaries group by top-l
     false,
   );
   assert.ok(FINANCE_TOOLS.get_summary.input.safeParse({ group_by: "top_category" }).success);
+  assert.ok(
+    FINANCE_TOOLS.get_summary.input.safeParse({
+      from: "2026-10-01",
+      to: "2026-11-30",
+      statement: true,
+      account_id: crypto.randomUUID(),
+    }).success,
+  );
+  assert.equal(FINANCE_TOOLS.get_summary.input.safeParse({ statement: "yes" }).success, false);
 });
 
 Deno.test("every tool has a short description and a closed input", () => {

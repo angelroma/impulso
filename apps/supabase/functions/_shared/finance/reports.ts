@@ -3,14 +3,17 @@ import type { GetSummaryInput, ListTransactionsInput } from "../finance_contract
 import {
   compact,
   fail,
+  findAccount,
   resolveWorkspace,
   type Row,
   type Sql,
   today,
   withNotices,
+  type Workspace,
 } from "./common.ts";
 
 const MAX_GROUPS = 100;
+const MAX_STATEMENT_ROWS = 300;
 
 export async function listTransactions(sql: Sql, userId: string, input: ListTransactionsInput) {
   const workspace = await resolveWorkspace(sql, userId, input.workspace_id);
@@ -75,6 +78,15 @@ export async function getSummary(sql: Sql, userId: string, input: GetSummaryInpu
   const to = input.to ?? await today(sql, workspace.timezone);
   const from = input.from ?? `${to.slice(0, 7)}-01`;
   if (from > to) throw fail(400, "invalid_period", "from must not be after to.");
+  if (input.statement) {
+    if (input.group_by) {
+      throw fail(400, "invalid_input", "A statement cannot be grouped; omit group_by.");
+    }
+    return await statement(sql, workspace, from, to, input.account_id);
+  }
+  if (input.account_id) {
+    throw fail(400, "invalid_input", "account_id applies only with statement: true.");
+  }
   const base = sql`
     FROM finance.transactions t
     JOIN finance.accounts a ON a.id = t.account_id
@@ -123,6 +135,98 @@ export async function getSummary(sql: Sql, userId: string, input: GetSummaryInpu
     },
     groups.length > MAX_GROUPS
       ? [`Only the first ${MAX_GROUPS} groups are shown; narrow the period.`]
+      : [],
+  );
+}
+
+/**
+ * The period report: per currency, the balance carried over from before `from`, every transaction
+ * of the period oldest first with a running balance, and the closing balance. It covers one
+ * account or all active accounts together, so a report that reaches the last transaction closes
+ * on the balances get_context shows. Everything is computed on read with exact decimals.
+ */
+async function statement(
+  sql: Sql,
+  workspace: Workspace,
+  from: string,
+  to: string,
+  accountId: string | undefined,
+) {
+  const account = accountId ? await findAccount(sql, workspace.id, accountId) : null;
+  const covered = sql`
+    SELECT id, currency, opening_balance FROM finance.accounts
+    WHERE workspace_id = ${workspace.id}
+      ${account ? sql`AND id = ${account.id}` : sql`AND archived_at IS NULL`}`;
+  // `change` is what a transaction does to the covered accounts: a transfer between two of them
+  // changes nothing, and one that crosses the edge counts only on the covered side.
+  const moves = sql`
+    SELECT t.id, t.occurred_on, t.created_at, t.kind, t.amount, t.notes, t.payee_id,
+      t.category_id, t.account_id, t.to_account_id, COALESCE(src.currency, dst.currency) AS currency,
+      (CASE WHEN src.id IS NULL THEN 0 WHEN t.kind = 'income' THEN t.amount ELSE -t.amount END
+        + CASE WHEN dst.id IS NULL THEN 0 ELSE t.amount END) AS change
+    FROM finance.transactions t
+    LEFT JOIN covered src ON src.id = t.account_id
+    LEFT JOIN covered dst ON dst.id = t.to_account_id
+    WHERE t.workspace_id = ${workspace.id} AND t.deleted_at IS NULL
+      AND t.occurred_on <= ${to}::date AND (src.id IS NOT NULL OR dst.id IS NOT NULL)`;
+  const opening = sql`
+    SELECT currency, SUM(opening_balance) AS opening FROM covered GROUP BY currency`;
+  const inPeriod = sql`m.occurred_on >= ${from}::date`;
+  const totals = await sql<Row[]>`
+    WITH covered AS (${covered}), moves AS (${moves}), opening AS (${opening})
+    SELECT o.currency,
+      (o.opening + COALESCE(SUM(m.change) FILTER (WHERE NOT ${inPeriod}), 0.00))::text
+        AS opening_balance,
+      COALESCE(SUM(m.amount) FILTER (WHERE ${inPeriod} AND m.kind = 'income'), 0.00)::text
+        AS income,
+      COALESCE(SUM(m.amount) FILTER (WHERE ${inPeriod} AND m.kind = 'expense'), 0.00)::text
+        AS expense,
+      COALESCE(SUM(m.change) FILTER (WHERE ${inPeriod} AND m.kind = 'transfer'), 0.00)::text
+        AS transfers,
+      (o.opening + COALESCE(SUM(m.change), 0.00))::text AS closing_balance,
+      (count(m.id) FILTER (WHERE ${inPeriod}))::int AS count
+    FROM opening o LEFT JOIN moves m ON m.currency = o.currency
+    GROUP BY o.currency, o.opening ORDER BY o.currency`;
+  // The running balance adds up from the very first transaction, then only the period is kept.
+  const rows = await sql<Row[]>`
+    WITH covered AS (${covered}), moves AS (${moves}), opening AS (${opening}),
+    running AS (
+      SELECT m.*, o.opening + SUM(m.change) OVER (
+        PARTITION BY m.currency ORDER BY m.occurred_on, m.created_at, m.id) AS balance
+      FROM moves m JOIN opening o ON o.currency = m.currency
+    )
+    SELECT m.currency, m.occurred_on::text AS date, m.kind, p.name AS payee, c.name AS category,
+      a.name AS account, ta.name AS to_account, m.notes, m.amount::text AS amount,
+      m.change::text AS change, m.balance::text AS balance
+    FROM running m
+    JOIN finance.accounts a ON a.id = m.account_id
+    LEFT JOIN finance.accounts ta ON ta.id = m.to_account_id
+    LEFT JOIN finance.payees p ON p.id = m.payee_id
+    LEFT JOIN finance.categories c ON c.id = m.category_id
+    WHERE ${inPeriod}
+    ORDER BY m.occurred_on, m.created_at, m.id
+    LIMIT ${MAX_STATEMENT_ROWS + 1}`;
+  const [{ opening_date }] = await sql<{ opening_date: string }[]>`
+    SELECT (${from}::date - 1)::text AS opening_date`;
+  const shown = rows.slice(0, MAX_STATEMENT_ROWS);
+  return withNotices(
+    {
+      workspace: workspace.name,
+      ...(account ? { account: account.name } : {}),
+      from,
+      to,
+      opening_date,
+      statements: totals.map((total) => ({
+        ...total,
+        rows: shown.filter((row) => row.currency === total.currency)
+          .map(({ currency: _currency, ...row }) => compact(row)),
+      })),
+    },
+    rows.length > MAX_STATEMENT_ROWS
+      ? [
+        `Only the first ${MAX_STATEMENT_ROWS} transactions are listed; the balances cover the ` +
+        "whole period. Ask for a shorter period to list the rest.",
+      ]
       : [],
   );
 }

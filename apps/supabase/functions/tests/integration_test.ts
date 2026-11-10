@@ -748,6 +748,103 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
       );
     });
 
+    await test.step("A period report carries the earlier balance into a running balance", async () => {
+      const book = await call("manage_workspace", {
+        action: "create",
+        name: "Reporte",
+        currency: "MXN",
+        timezone: "America/Mexico_City",
+      });
+      const workspace_id = book.workspace.id;
+      const bank = (await call("manage_account", {
+        action: "create",
+        workspace_id,
+        name: "Banco",
+        opening_balance: "100",
+      })).account;
+      const card = (await call("manage_account", {
+        action: "create",
+        workspace_id,
+        name: "Tarjeta",
+        type: "credit_card",
+        opening_balance: "-50",
+      })).account;
+      const record = (kind: string, amount: string, date: string, extra = {}) =>
+        call("record_transaction", {
+          request_id: crypto.randomUUID(),
+          workspace_id,
+          kind,
+          amount,
+          date,
+          account_id: bank.id,
+          ...extra,
+        });
+      await record("expense", "30", "2026-09-10");
+      await record("income", "500", "2026-10-03", { payee: "Nómina" });
+      await record("transfer", "200", "2026-10-05", { to_account_id: card.id });
+      await record("expense", "70.25", "2026-11-02", { account_id: card.id, notes: "Súper" });
+      const removed = await record("expense", "999", "2026-10-20");
+      await call("update_transaction", {
+        action: "delete",
+        transaction_id: removed.transaction.id,
+      });
+      await record("expense", "1", "2026-12-01");
+
+      const period = { workspace_id, from: "2026-10-01", to: "2026-11-30", statement: true };
+      const report = await call("get_summary", period);
+      const [mxn] = report.statements;
+      assert(
+        report.opening_date === "2026-09-30" && report.statements.length === 1 &&
+          mxn.opening_balance === "20.00" && mxn.income === "500.00" &&
+          mxn.expense === "70.25" && mxn.transfers === "0.00" &&
+          mxn.closing_balance === "449.75" && mxn.count === 3,
+        "A report must carry the earlier balance and close with the period's result.",
+      );
+      assert(
+        mxn.rows.map((row: Result) => `${row.date} ${row.change} ${row.balance}`).join("|") ===
+            "2026-10-03 500.00 520.00|2026-10-05 0.00 520.00|2026-11-02 -70.25 449.75" &&
+          mxn.rows[0].payee === "Nómina" && mxn.rows[1].to_account === "Tarjeta" &&
+          mxn.rows[2].notes === "Súper",
+        "A report must list the period oldest first with a running balance.",
+      );
+
+      const single = await call("get_summary", { ...period, account_id: card.id });
+      assert(
+        single.account === "Tarjeta" && single.statements[0].opening_balance === "-50.00" &&
+          single.statements[0].transfers === "200.00" &&
+          single.statements[0].closing_balance === "79.75" &&
+          single.statements[0].rows[0].change === "200.00",
+        "A one-account report must count a transfer on that account's side.",
+      );
+
+      const quiet = await call("get_summary", {
+        workspace_id,
+        from: "2026-08-01",
+        to: "2026-08-31",
+        statement: true,
+      });
+      assert(
+        quiet.statements[0].opening_balance === "50.00" &&
+          quiet.statements[0].closing_balance === "50.00" &&
+          quiet.statements[0].rows.length === 0 && quiet.statements[0].count === 0,
+        "A period without transactions still reports the balance carried over.",
+      );
+
+      const today = await call("get_summary", {
+        workspace_id,
+        from: "2026-01-01",
+        to: "2026-12-31",
+        statement: true,
+      });
+      const totals = (await call("get_context", { workspace_id })).totals;
+      assert(
+        today.statements[0].closing_balance === totals[0].balance,
+        "A report through the last transaction must close on the balance the context shows.",
+      );
+      await expectError("get_summary", { ...period, group_by: "month" }, "invalid_input");
+      await expectError("get_summary", { workspace_id, account_id: bank.id }, "invalid_input");
+    });
+
     await test.step("Signing out invalidates reuse of the same access token", async () => {
       const signedOut = await client.auth.signOut({ scope: "local" });
       assert(!signedOut.error, "Signing out the disposable account failed.");

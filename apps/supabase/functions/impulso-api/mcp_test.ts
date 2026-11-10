@@ -115,6 +115,10 @@ Deno.test("MCP initializes with short guidance and the ten Finance tools", async
   const instructions: string = initialized.result.instructions;
   assert.match(instructions, /Call get_context before the first action/);
   assert.match(instructions, /one or two lines/);
+  assert.match(
+    instructions,
+    /statement: true.*Date \| Concept \| Category \| Account \| Income \| Expense \| Balance/s,
+  );
   assert.ok(instructions.length < 2000, "Guidance must stay short.");
   assert.equal((await handle(rpc("notifications/initialized", undefined, null))).status, 202);
   const listed = await (await handle(rpc("tools/list"))).json();

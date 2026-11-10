@@ -31,6 +31,12 @@ const INSTRUCTIONS = [
   "Use a new UUID request_id for each new transaction and reuse it only to retry that same one.",
   "Pass the payee name as the user said it. Omit category_id to use the payee's default category. " +
   "When a new payee gets a category, save it as that payee's default with manage_payee update.",
+  "For a period report call get_summary with statement: true and always reply with the same " +
+  "table per currency: Date | Concept | Category | Account | Income | Expense | Balance. First " +
+  "row: balance carried over as of opening_date. Then each transaction in the order returned: " +
+  "Concept is the payee or the notes (transfers: account → to_account); a positive change goes " +
+  "under Income, a negative one under Expense, zero under neither. Last row: closing balance " +
+  "with the income and expense totals. Copy amounts as returned; never recompute them.",
   "Never send tokens, passwords or SQL as tool input.",
 ].join("\n");
 
