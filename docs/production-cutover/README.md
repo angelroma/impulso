@@ -7,6 +7,20 @@ serves the API and the MCP endpoint.
 Every step under "Cutover" changes production. Per the constitution, none of them runs without
 the owner's explicit approval. Between steps 2 and 6 the hosted MCP does not work.
 
+## Status: done on 2026-11-09
+
+Cutover steps 2, 3, 5 and 6 ran against production with the owner's approval: legacy schemas
+dropped, baseline applied, 188 transactions in 2 workspaces loaded, `impulso-api` deployed.
+`/health`, the protected-resource metadata and the unauthenticated MCP challenge respond as
+expected. Not done: sign-in pages on Cloudflare Pages, `push-config`, and an authenticated tool
+call (needs the owner to reconnect the connector).
+
+SQL was run with the CLI instead of the SQL editor; `--file` resolves against `--workdir`:
+
+```bash
+npx supabase db query --linked --project-ref txoorpmblpvqveeudafv --workdir apps --file ../docs/production-cutover/01_drop_legacy_schema.sql
+```
+
 ## Verified locally (2026-11-09)
 
 - `check`, `lint`, `test`, `test-db`, `verify-schema` and `test-integration` pass.
