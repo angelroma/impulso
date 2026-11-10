@@ -12,6 +12,7 @@ import {
   type Row,
   type Sql,
   today,
+  validCurrency,
   validTimezone,
   type Workspace,
 } from "./common.ts";
@@ -62,6 +63,7 @@ const createWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input)
   if (!input.currency) throw required("currency", "create a workspace");
   if (!input.timezone) throw required("timezone", "create a workspace");
   await validTimezone(sql, input.timezone);
+  await validCurrency(sql, input.currency);
   const [{ count }] = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM finance.workspaces
     WHERE owner_user_id = ${userId} AND archived_at IS NULL`;
@@ -81,6 +83,7 @@ const updateWorkspace: Action<ManageWorkspaceInput> = async (sql, userId, input)
     throw fail(409, "default_workspace", "Set another workspace as default instead.");
   }
   if (input.currency && input.currency !== workspace.currency) {
+    await validCurrency(sql, input.currency);
     // Project budgets are in the workspace currency; changing it would silently drop their spending.
     const [account] =
       await sql`SELECT 1 FROM finance.accounts WHERE workspace_id = ${workspace.id} LIMIT 1`;

@@ -1,4 +1,5 @@
--- Impulso baseline: workspaces, accounts, categories, payees, projects and transactions.
+-- Impulso baseline: five reference tables (currencies, account types, transaction and category
+-- kinds, project statuses) and workspaces, accounts, categories, payees, projects and transactions.
 -- Replaces the earlier migration history after a full database reset.
 
 -- Roles survive some reset paths; this anonymous block only creates infrastructure when absent.
@@ -46,13 +47,118 @@ ALTER VIEW private.oauth_consents OWNER TO postgres;
 
 REVOKE ALL ON TABLE private.oauth_consents FROM PUBLIC, anon, authenticated, service_role;
 
+-- Reference data: the ISO 4217 currencies a workspace or account can use. Rows are seeded by the
+-- baseline migration; supporting another currency is one INSERT, not a schema change.
+
+CREATE TABLE finance.currencies (
+    code text PRIMARY KEY CHECK (code ~ '^[A-Z]{3}$'),
+    name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100)
+);
+
+ALTER TABLE finance.currencies ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE finance.currencies FROM PUBLIC, anon, authenticated, service_role;
+
+-- Reference data: what an account is (cash, checking, savings, credit_card, loan, investment).
+-- is_liability marks types whose balance is money owed, recorded as a negative amount.
+
+CREATE TABLE finance.account_types (
+    code text PRIMARY KEY CHECK (code ~ '^[a-z][a-z_]{0,29}$'),
+    is_liability boolean NOT NULL DEFAULT false
+);
+
+ALTER TABLE finance.account_types ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE finance.account_types FROM PUBLIC, anon, authenticated, service_role;
+
+-- Reference data: the direction of a transaction (income, expense, transfer).
+
+CREATE TABLE finance.transaction_kinds (
+    code text PRIMARY KEY CHECK (code ~ '^[a-z][a-z_]{0,29}$')
+);
+
+ALTER TABLE finance.transaction_kinds ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE finance.transaction_kinds FROM PUBLIC, anon, authenticated, service_role;
+
+-- Reference data: the transaction kinds a category can label (income, expense; never transfer).
+
+CREATE TABLE finance.category_kinds (
+    code text PRIMARY KEY REFERENCES finance.transaction_kinds(code) ON DELETE RESTRICT
+);
+
+ALTER TABLE finance.category_kinds ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE finance.category_kinds FROM PUBLIC, anon, authenticated, service_role;
+
+-- Reference data: where a project stands (active, closed).
+
+CREATE TABLE finance.project_statuses (
+    code text PRIMARY KEY CHECK (code ~ '^[a-z][a-z_]{0,29}$')
+);
+
+ALTER TABLE finance.project_statuses ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE finance.project_statuses FROM PUBLIC, anon, authenticated, service_role;
+
+-- Reference data. Codes are the stored values, so rows stay readable without joins.
+
+INSERT INTO finance.currencies (code, name) VALUES
+    ('MXN', 'Mexican peso'),
+    ('USD', 'US dollar'),
+    ('CAD', 'Canadian dollar'),
+    ('EUR', 'Euro'),
+    ('GBP', 'Pound sterling'),
+    ('CHF', 'Swiss franc'),
+    ('JPY', 'Japanese yen'),
+    ('CNY', 'Chinese yuan'),
+    ('HKD', 'Hong Kong dollar'),
+    ('SGD', 'Singapore dollar'),
+    ('KRW', 'South Korean won'),
+    ('INR', 'Indian rupee'),
+    ('AUD', 'Australian dollar'),
+    ('NZD', 'New Zealand dollar'),
+    ('SEK', 'Swedish krona'),
+    ('NOK', 'Norwegian krone'),
+    ('DKK', 'Danish krone'),
+    ('PLN', 'Polish zloty'),
+    ('CZK', 'Czech koruna'),
+    ('TRY', 'Turkish lira'),
+    ('ILS', 'Israeli new shekel'),
+    ('AED', 'UAE dirham'),
+    ('SAR', 'Saudi riyal'),
+    ('ZAR', 'South African rand'),
+    ('BRL', 'Brazilian real'),
+    ('ARS', 'Argentine peso'),
+    ('CLP', 'Chilean peso'),
+    ('COP', 'Colombian peso'),
+    ('PEN', 'Peruvian sol'),
+    ('UYU', 'Uruguayan peso'),
+    ('GTQ', 'Guatemalan quetzal'),
+    ('CRC', 'Costa Rican colon'),
+    ('DOP', 'Dominican peso');
+
+INSERT INTO finance.account_types (code, is_liability) VALUES
+    ('cash', false),
+    ('checking', false),
+    ('savings', false),
+    ('investment', false),
+    ('credit_card', true),
+    ('loan', true);
+
+INSERT INTO finance.transaction_kinds (code) VALUES ('income'), ('expense'), ('transfer');
+
+INSERT INTO finance.category_kinds (code) VALUES ('income'), ('expense');
+
+INSERT INTO finance.project_statuses (code) VALUES ('active'), ('closed');
+
 -- Independent containers owned by one user, for example "Yo", "Mamá" or "Negocio".
 
 CREATE TABLE finance.workspaces (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
-    currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    currency text NOT NULL REFERENCES finance.currencies(code) ON DELETE RESTRICT,
     timezone text NOT NULL CHECK (char_length(timezone) BETWEEN 1 AND 64),
     is_default boolean NOT NULL DEFAULT false,
     archived_at timestamptz,
@@ -75,8 +181,8 @@ CREATE TABLE finance.accounts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
-    kind text NOT NULL DEFAULT 'bank' CHECK (kind IN ('cash', 'bank', 'credit_card', 'loan', 'investment')),
-    currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    type text NOT NULL DEFAULT 'checking' REFERENCES finance.account_types(code) ON DELETE RESTRICT,
+    currency text NOT NULL REFERENCES finance.currencies(code) ON DELETE RESTRICT,
     opening_balance numeric(14,2) NOT NULL DEFAULT 0,
     is_default boolean NOT NULL DEFAULT false,
     archived_at timestamptz,
@@ -102,7 +208,7 @@ CREATE TABLE finance.categories (
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     parent_id uuid,
-    kind text NOT NULL CHECK (kind IN ('income', 'expense')),
+    kind text NOT NULL REFERENCES finance.category_kinds(code) ON DELETE RESTRICT,
     archived_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
@@ -148,7 +254,7 @@ CREATE TABLE finance.projects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
-    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+    status text NOT NULL DEFAULT 'active' REFERENCES finance.project_statuses(code) ON DELETE RESTRICT,
     budget numeric(14,2) CHECK (budget IS NULL OR budget > 0),
     start_date date,
     end_date date,
@@ -168,13 +274,14 @@ REVOKE ALL ON TABLE finance.projects FROM PUBLIC, anon, authenticated, service_r
 -- One row per income, expense or transfer. Rows are editable; deleted_at is a restorable soft delete.
 -- Composite keys keep every reference inside the row's workspace. They are deferrable so an
 -- account and its transactions can move to another workspace inside one transaction.
+-- The category key includes kind, so an expense can only carry an expense category.
 
 CREATE TABLE finance.transactions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     account_id uuid NOT NULL,
     to_account_id uuid,
-    kind text NOT NULL CHECK (kind IN ('income', 'expense', 'transfer')),
+    kind text NOT NULL REFERENCES finance.transaction_kinds(code) ON DELETE RESTRICT,
     amount numeric(14,2) NOT NULL CHECK (amount > 0),
     occurred_on date NOT NULL,
     payee_id uuid,
@@ -188,7 +295,7 @@ CREATE TABLE finance.transactions (
     FOREIGN KEY (workspace_id, account_id) REFERENCES finance.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (workspace_id, to_account_id) REFERENCES finance.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (workspace_id, payee_id) REFERENCES finance.payees(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
-    FOREIGN KEY (workspace_id, category_id) REFERENCES finance.categories(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, category_id, kind) REFERENCES finance.categories(workspace_id, id, kind) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (workspace_id, project_id) REFERENCES finance.projects(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     CHECK ((kind = 'transfer') = (to_account_id IS NOT NULL)),
     CHECK (to_account_id IS NULL OR to_account_id <> account_id),
@@ -237,6 +344,15 @@ GRANT SELECT, INSERT, UPDATE ON TABLE
     finance.payees,
     finance.projects,
     finance.transactions
+TO impulso_backend;
+
+-- Reference data is fixed by migrations; the backend only reads it.
+GRANT SELECT ON TABLE
+    finance.currencies,
+    finance.account_types,
+    finance.transaction_kinds,
+    finance.category_kinds,
+    finance.project_statuses
 TO impulso_backend;
 
 -- Owner-checked projections expose only Auth identifiers and grant state; locks reach base rows.

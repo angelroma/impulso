@@ -5,7 +5,7 @@ CREATE TABLE finance.workspaces (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
-    currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    currency text NOT NULL REFERENCES finance.currencies(code) ON DELETE RESTRICT,
     timezone text NOT NULL CHECK (char_length(timezone) BETWEEN 1 AND 64),
     is_default boolean NOT NULL DEFAULT false,
     archived_at timestamptz,

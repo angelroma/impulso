@@ -7,7 +7,7 @@ CREATE TABLE finance.categories (
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
     parent_id uuid,
-    kind text NOT NULL CHECK (kind IN ('income', 'expense')),
+    kind text NOT NULL REFERENCES finance.category_kinds(code) ON DELETE RESTRICT,
     archived_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),

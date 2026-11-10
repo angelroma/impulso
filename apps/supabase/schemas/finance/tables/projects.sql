@@ -5,7 +5,7 @@ CREATE TABLE finance.projects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
-    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+    status text NOT NULL DEFAULT 'active' REFERENCES finance.project_statuses(code) ON DELETE RESTRICT,
     budget numeric(14,2) CHECK (budget IS NULL OR budget > 0),
     start_date date,
     end_date date,

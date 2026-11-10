@@ -8,16 +8,22 @@ SELECT no_plan();
 CREATE TEMPORARY TABLE expected_tables (
   schema_name text NOT NULL,
   table_name text NOT NULL,
+  is_reference boolean NOT NULL DEFAULT false,
   PRIMARY KEY (schema_name, table_name)
 ) ON COMMIT DROP;
 
 INSERT INTO expected_tables VALUES
-  ('finance', 'workspaces'),
-  ('finance', 'accounts'),
-  ('finance', 'categories'),
-  ('finance', 'payees'),
-  ('finance', 'projects'),
-  ('finance', 'transactions');
+  ('finance', 'currencies', true),
+  ('finance', 'account_types', true),
+  ('finance', 'transaction_kinds', true),
+  ('finance', 'category_kinds', true),
+  ('finance', 'project_statuses', true),
+  ('finance', 'workspaces', false),
+  ('finance', 'accounts', false),
+  ('finance', 'categories', false),
+  ('finance', 'payees', false),
+  ('finance', 'projects', false),
+  ('finance', 'transactions', false);
 
 CREATE TEMPORARY TABLE expected_auth_views (
   view_name text PRIMARY KEY,
@@ -80,8 +86,8 @@ FROM (VALUES ('auth_users'), ('auth_sessions')) AS views(view_name);
 SELECT is(
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname IN ('finance', 'private') AND c.relkind IN ('r', 'p')),
-  6::bigint,
-  'The model contains exactly 6 application tables'
+  11::bigint,
+  'The model contains exactly 5 reference tables and 6 application tables'
 );
 
 SELECT ok(coalesce(c.relrowsecurity, false), e.schema_name || '.' || e.table_name || ' enables RLS')
@@ -155,7 +161,44 @@ SELECT ok(
     AND NOT has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'TRIGGER'),
   'The backend can read, insert and edit finance.' || e.table_name || ' but never delete it'
 )
-FROM expected_tables e WHERE e.schema_name = 'finance' ORDER BY e.table_name;
+FROM expected_tables e WHERE e.schema_name = 'finance' AND NOT e.is_reference ORDER BY e.table_name;
+
+SELECT ok(
+  has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'SELECT')
+    AND NOT has_table_privilege('impulso_backend', 'finance.' || e.table_name, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),
+  'The backend can only read reference table finance.' || e.table_name
+)
+FROM expected_tables e WHERE e.is_reference ORDER BY e.table_name;
+
+SELECT is(
+  (SELECT array_agg(code ORDER BY code) FROM finance.account_types),
+  ARRAY['cash', 'checking', 'credit_card', 'investment', 'loan', 'savings'],
+  'Account types are seeded'
+);
+SELECT is(
+  (SELECT array_agg(code ORDER BY code) FROM finance.account_types WHERE is_liability),
+  ARRAY['credit_card', 'loan'],
+  'Cards and loans are the liability account types'
+);
+SELECT is(
+  (SELECT array_agg(code ORDER BY code) FROM finance.transaction_kinds),
+  ARRAY['expense', 'income', 'transfer'],
+  'Transaction kinds are seeded'
+);
+SELECT is(
+  (SELECT array_agg(code ORDER BY code) FROM finance.category_kinds),
+  ARRAY['expense', 'income'],
+  'Category kinds are seeded and exclude transfer'
+);
+SELECT is(
+  (SELECT array_agg(code ORDER BY code) FROM finance.project_statuses),
+  ARRAY['active', 'closed'],
+  'Project statuses are seeded'
+);
+SELECT ok(
+  EXISTS (SELECT 1 FROM finance.currencies WHERE code = 'MXN'),
+  'Currencies are seeded'
+);
 
 -- Integrity checks use a rolled-back fixture owned by a disposable Auth user.
 INSERT INTO auth.users (id, aud, role, email, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
@@ -168,6 +211,44 @@ INSERT INTO finance.accounts (id, workspace_id, name, currency, is_default) VALU
   ('00000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000012', 'Banorte', 'MXN', true);
 INSERT INTO finance.categories (id, workspace_id, name, kind) VALUES
   ('00000000-0000-4000-8000-000000000031', '00000000-0000-4000-8000-000000000011', 'Comida', 'expense');
+
+SELECT is(
+  (SELECT type FROM finance.accounts WHERE id = '00000000-0000-4000-8000-000000000021'),
+  'checking',
+  'An account is a checking account by default'
+);
+SELECT throws_ok(
+  $$INSERT INTO finance.workspaces (owner_user_id, name, currency, timezone)
+    VALUES ('00000000-0000-4000-8000-000000000001', 'Otro', 'ZZZ', 'UTC')$$,
+  '23503', NULL, 'A workspace needs a known currency'
+);
+SELECT throws_ok(
+  $$INSERT INTO finance.accounts (workspace_id, name, type, currency)
+    VALUES ('00000000-0000-4000-8000-000000000011', 'Otra', 'bank', 'MXN')$$,
+  '23503', NULL, 'An account needs a known account type'
+);
+SELECT throws_ok(
+  $$INSERT INTO finance.categories (workspace_id, name, kind)
+    VALUES ('00000000-0000-4000-8000-000000000011', 'Traspasos', 'transfer')$$,
+  '23503', NULL, 'A category cannot be a transfer category'
+);
+SELECT throws_ok(
+  $$INSERT INTO finance.projects (workspace_id, name, status)
+    VALUES ('00000000-0000-4000-8000-000000000011', 'Viaje', 'paused')$$,
+  '23503', NULL, 'A project needs a known status'
+);
+SELECT throws_ok(
+  $$INSERT INTO finance.transactions (workspace_id, account_id, kind, amount, occurred_on, request_id)
+    VALUES ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000021', 'refund', 10,
+      '2026-11-09', gen_random_uuid())$$,
+  '23503', NULL, 'A transaction needs a known kind'
+);
+SELECT throws_ok(
+  $$INSERT INTO finance.transactions (workspace_id, account_id, kind, amount, occurred_on, category_id, request_id)
+    VALUES ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000021', 'income', 10,
+      '2026-11-09', '00000000-0000-4000-8000-000000000031', gen_random_uuid())$$,
+  '23503', NULL, 'An income cannot carry an expense category'
+);
 
 SELECT throws_ok(
   $$INSERT INTO finance.workspaces (owner_user_id, name, currency, timezone, is_default)

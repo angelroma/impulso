@@ -12,14 +12,16 @@ import {
   required,
   resolveWorkspace,
   type Sql,
+  validCurrency,
   type Workspace,
 } from "./common.ts";
 
-/** Money owed on a card or loan is recorded as a negative balance. */
-const DEBT_KINDS = new Set(["credit_card", "loan"]);
-
-function checkOpeningBalance(kind: string, openingBalance: string | undefined) {
-  if (openingBalance !== undefined && DEBT_KINDS.has(kind) && Number(openingBalance) > 0) {
+/** Money owed on a liability type (card, loan) is recorded as a negative balance. */
+async function checkOpeningBalance(sql: Sql, type: string, openingBalance: string | undefined) {
+  if (openingBalance === undefined || Number(openingBalance) <= 0) return;
+  const [{ is_liability }] = await sql<{ is_liability: boolean }[]>`
+    SELECT is_liability FROM finance.account_types WHERE code = ${type}`;
+  if (is_liability) {
     throw fail(
       400,
       "debt_must_be_negative",
@@ -35,16 +37,17 @@ export function manageAccount(sql: Sql, userId: string, input: ManageAccountInpu
 const createAccount: Action<ManageAccountInput> = async (sql, userId, input) => {
   const workspace = await resolveWorkspace(sql, userId, input.workspace_id, true);
   if (!input.name) throw required("name", "create an account");
-  const kind = input.kind ?? "bank";
-  checkOpeningBalance(kind, input.opening_balance);
+  const type = input.type ?? "checking";
+  await checkOpeningBalance(sql, type, input.opening_balance);
+  if (input.currency) await validCurrency(sql, input.currency);
   const [{ count }] = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM finance.accounts
     WHERE workspace_id = ${workspace.id} AND archived_at IS NULL`;
   const isDefault = count === 0 || input.is_default === true;
   if (isDefault) await clearDefaultAccount(sql, workspace.id);
   const [account] = await sql<{ id: string }[]>`
-    INSERT INTO finance.accounts (workspace_id, name, kind, currency, opening_balance, is_default)
-    VALUES (${workspace.id}, ${input.name}, ${kind}, ${input.currency ?? workspace.currency},
+    INSERT INTO finance.accounts (workspace_id, name, type, currency, opening_balance, is_default)
+    VALUES (${workspace.id}, ${input.name}, ${type}, ${input.currency ?? workspace.currency},
       ${input.opening_balance ?? "0"}, ${isDefault})
     RETURNING id`;
   return { status: "created", account: (await accountBalances(sql, workspace.id, account.id))[0] };
@@ -52,13 +55,14 @@ const createAccount: Action<ManageAccountInput> = async (sql, userId, input) => 
 
 const updateAccount: Action<ManageAccountInput> = async (sql, userId, input) => {
   const { workspace, account } = await ownedAccount(sql, userId, input, { active: true });
-  checkOpeningBalance(input.kind ?? account.kind, input.opening_balance);
-  if (input.kind && DEBT_KINDS.has(input.kind) && input.opening_balance === undefined) {
+  await checkOpeningBalance(sql, input.type ?? account.type, input.opening_balance);
+  if (input.type && input.opening_balance === undefined) {
     const [current] = await sql<{ opening_balance: string }[]>`
       SELECT opening_balance::text AS opening_balance FROM finance.accounts WHERE id = ${account.id}`;
-    checkOpeningBalance(input.kind, current.opening_balance);
+    await checkOpeningBalance(sql, input.type, current.opening_balance);
   }
   if (input.currency && input.currency !== account.currency) {
+    await validCurrency(sql, input.currency);
     const [used] = await sql`
       SELECT 1 FROM finance.transactions
       WHERE account_id = ${account.id} OR to_account_id = ${account.id} LIMIT 1`;
@@ -76,7 +80,7 @@ const updateAccount: Action<ManageAccountInput> = async (sql, userId, input) => 
   if (input.is_default === true) await clearDefaultAccount(sql, workspace.id);
   const changes = definedFields({
     name: input.name,
-    kind: input.kind,
+    type: input.type,
     currency: input.currency,
     opening_balance: input.opening_balance,
     is_default: input.is_default,

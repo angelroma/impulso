@@ -26,6 +26,15 @@ GRANT SELECT, INSERT, UPDATE ON TABLE
     finance.transactions
 TO impulso_backend;
 
+-- Reference data is fixed by migrations; the backend only reads it.
+GRANT SELECT ON TABLE
+    finance.currencies,
+    finance.account_types,
+    finance.transaction_kinds,
+    finance.category_kinds,
+    finance.project_statuses
+TO impulso_backend;
+
 -- Owner-checked projections expose only Auth identifiers and grant state; locks reach base rows.
 GRANT SELECT (id), UPDATE (updated_at) ON TABLE private.auth_users TO impulso_backend;
 GRANT SELECT (id, user_id, not_after, oauth_client_id, scopes), UPDATE (updated_at)

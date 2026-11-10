@@ -20,7 +20,7 @@ const signedAmount = z.string().regex(
   "Use a decimal string with up to two decimals.",
 );
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
-const accountKind = z.enum(["cash", "bank", "credit_card", "loan", "investment"]);
+const accountType = z.enum(["cash", "checking", "savings", "credit_card", "loan", "investment"]);
 const transactionKind = z.enum(["income", "expense", "transfer"]);
 
 export const getContextInput = z.object({
@@ -43,7 +43,7 @@ export const manageAccountInput = z.object({
   workspace_id: uuid.optional().describe("Workspace for create; omit to use the default."),
   account_id: uuid.optional().describe("Required for update, archive and move."),
   name: name.optional(),
-  kind: accountKind.optional(),
+  type: accountType.optional().describe("Defaults to checking on create."),
   currency: currency.optional().describe("Defaults to the workspace currency on create."),
   opening_balance: signedAmount.optional().describe(
     "Starting balance. Use a negative amount for money owed on a credit_card or loan.",
@@ -171,7 +171,7 @@ export const FINANCE_TOOLS = {
     readOnly: false,
     input: manageAccountInput,
     description:
-      "Create, rename, update kind/opening balance, set default, archive, or move an account to " +
+      "Create, rename, update type/opening balance, set default, archive, or move an account to " +
       "another workspace together with all its transactions.",
   },
   manage_category: {

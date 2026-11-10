@@ -596,7 +596,7 @@ Deno.test("Local MCP uses consented OAuth, PKCE and the Finance tools", async (t
         currency: "MXN",
         timezone: "America/Mexico_City",
       });
-      await call("manage_account", { action: "create", name: "Efectivo", kind: "cash" });
+      await call("manage_account", { action: "create", name: "Efectivo", type: "cash" });
       const expense = {
         request_id: crypto.randomUUID(),
         kind: "expense",

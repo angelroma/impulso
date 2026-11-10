@@ -240,7 +240,7 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
         bbva.account.is_default === true && bbva.account.currency === "MXN",
         "The first account must become the default in the workspace currency.",
       );
-      await call("manage_account", { action: "create", name: "Efectivo", kind: "cash" });
+      await call("manage_account", { action: "create", name: "Efectivo", type: "cash" });
       await call("manage_account", {
         action: "update",
         account_id: bbva.account.id,
@@ -383,13 +383,13 @@ Deno.test("Local Edge API verifies identity and runs the Finance service", async
       await expectError("manage_account", {
         action: "create",
         name: "Tarjeta Nu",
-        kind: "credit_card",
+        type: "credit_card",
         opening_balance: "5000",
       }, "debt_must_be_negative");
       const card = await call("manage_account", {
         action: "create",
         name: "Tarjeta Nu",
-        kind: "credit_card",
+        type: "credit_card",
         opening_balance: "-5000",
       });
       assert(card.account.balance === "-5000.00", "A card debt starts as a negative balance.");

@@ -24,7 +24,7 @@ export interface Account {
   id: string;
   workspace_id: string;
   name: string;
-  kind: string;
+  type: string;
   currency: string;
   archived_at: Date | null;
 }
@@ -101,6 +101,13 @@ export async function validTimezone(sql: Sql, timezone: string): Promise<void> {
   }
 }
 
+export async function validCurrency(sql: Sql, currency: string): Promise<void> {
+  const [known] = await sql`SELECT 1 FROM finance.currencies WHERE code = ${currency}`;
+  if (!known) {
+    throw fail(400, "unsupported_currency", `The currency ${currency} is not supported.`);
+  }
+}
+
 export async function findAccount(
   sql: Sql,
   workspaceId: string,
@@ -109,7 +116,7 @@ export async function findAccount(
 ): Promise<Account> {
   const locking = lock ? sql`FOR UPDATE` : sql``;
   const [account] = await sql<Account[]>`
-    SELECT id, workspace_id, name, kind, currency, archived_at FROM finance.accounts
+    SELECT id, workspace_id, name, type, currency, archived_at FROM finance.accounts
     WHERE id = ${accountId} AND workspace_id = ${workspaceId} ${locking}`;
   if (!account) throw notFound("The account");
   return account;
@@ -130,7 +137,7 @@ export async function activeAccount(
     return account;
   }
   const [account] = await sql<Account[]>`
-    SELECT id, workspace_id, name, kind, currency, archived_at FROM finance.accounts
+    SELECT id, workspace_id, name, type, currency, archived_at FROM finance.accounts
     WHERE workspace_id = ${workspaceId} AND is_default AND archived_at IS NULL`;
   if (!account) {
     throw fail(
@@ -234,7 +241,7 @@ export async function mapPayee(sql: Sql, payeeId: string | null, targetWorkspace
 export async function accountBalances(sql: Sql, workspaceId: string, accountId?: string) {
   const only = accountId ? sql`AND a.id = ${accountId}` : sql``;
   return await sql<Row[]>`
-    SELECT a.id, a.name, a.kind, a.currency, a.is_default,
+    SELECT a.id, a.name, a.type, a.currency, a.is_default,
       (a.opening_balance + COALESCE(SUM(
         CASE
           WHEN t.kind = 'income' AND t.account_id = a.id THEN t.amount

@@ -2,13 +2,14 @@
 -- One row per income, expense or transfer. Rows are editable; deleted_at is a restorable soft delete.
 -- Composite keys keep every reference inside the row's workspace. They are deferrable so an
 -- account and its transactions can move to another workspace inside one transaction.
+-- The category key includes kind, so an expense can only carry an expense category.
 
 CREATE TABLE finance.transactions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid NOT NULL REFERENCES finance.workspaces(id) ON DELETE RESTRICT,
     account_id uuid NOT NULL,
     to_account_id uuid,
-    kind text NOT NULL CHECK (kind IN ('income', 'expense', 'transfer')),
+    kind text NOT NULL REFERENCES finance.transaction_kinds(code) ON DELETE RESTRICT,
     amount numeric(14,2) NOT NULL CHECK (amount > 0),
     occurred_on date NOT NULL,
     payee_id uuid,
@@ -22,7 +23,7 @@ CREATE TABLE finance.transactions (
     FOREIGN KEY (workspace_id, account_id) REFERENCES finance.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (workspace_id, to_account_id) REFERENCES finance.accounts(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (workspace_id, payee_id) REFERENCES finance.payees(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
-    FOREIGN KEY (workspace_id, category_id) REFERENCES finance.categories(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    FOREIGN KEY (workspace_id, category_id, kind) REFERENCES finance.categories(workspace_id, id, kind) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (workspace_id, project_id) REFERENCES finance.projects(workspace_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     CHECK ((kind = 'transfer') = (to_account_id IS NOT NULL)),
     CHECK (to_account_id IS NULL OR to_account_id <> account_id),
