@@ -1,3 +1,16 @@
+<!--
+Sync Impact Report
+- Version: 1.0.0 -> 1.1.0 (MINOR: Principle I materially expanded)
+- Modified principles: I. Minimal Model (six application tables plus five reference tables;
+  rule for enumerated values added)
+- Added sections: none
+- Removed sections: none
+- Templates: plan-template.md, spec-template.md, tasks-template.md need no change
+- Follow-ups: specs/001-workspaces flags that the default categories are in Spanish while
+  "System-generated defaults are in English" (Technology and Language Constraints); the user
+  decides whether to amend the rule or the seed.
+-->
+
 # Impulso Constitution
 
 ## Core Principles
@@ -6,8 +19,14 @@
 
 Impulso serves a single user and MUST stay as small as that user's real needs.
 
-- The schema contains only tables the user actively uses. Today that is six tables:
-  workspaces, accounts, categories, payees, projects and transactions.
+- The schema contains only tables the user actively uses. Today that is six application
+  tables (workspaces, accounts, categories, payees, projects and transactions) and five
+  reference tables (currencies, account_types, transaction_kinds, category_kinds and
+  project_statuses).
+- Enumerated values (kinds, types, statuses, currency codes) MUST live in a reference table
+  keyed by a text code and be enforced with foreign keys, not repeated `CHECK` lists.
+  Reference rows are seeded by migrations and are read-only to the backend role. A reference
+  table is added only when an application column needs it.
 - A new table, column, MCP tool or tool action MUST trace to a requirement in a feature spec
   that names the user need it serves.
 - Features the user has explicitly rejected MUST NOT be reintroduced unless the user asks for
@@ -127,4 +146,4 @@ CLAUDE.md hold runtime guidance for agents and MUST stay consistent with it.
 - Every plan and every review MUST verify compliance with the Core Principles. Added complexity
   MUST be justified in writing.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-09
+**Version**: 1.1.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-09
