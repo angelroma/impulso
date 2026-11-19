@@ -20,13 +20,15 @@ export interface McpDependencies {
 const INSTRUCTIONS = [
   "Call get_context before the first action and reuse its ids; call it again after changing workspace.",
   "If setup_required is true, ask only for a workspace name (suggest Personal) and its currency, " +
-  "use the time zone the client already knows or ask for the city, then call manage_workspace create.",
+  "use the time zone the client already knows, then call manage_workspace create.",
   "Be brief: reply in the user's language in one or two lines. Do not show reviews or ask for " +
   "confirmation when the request is clear; act and report the result in one line (amount, payee, " +
   "category, account, new balance).",
-  "When a reply has notices or suggested_category, tell the user in one line and ask if needed.",
-  "When something is missing or ambiguous, ask one short question and offer the matching options " +
-  "from get_context as a short numbered list (or the client's choice buttons). Never explain internals.",
+  "When a reply has notices or suggested_category, tell the user in one line.",
+  "Never ask the user in plain text. Every question (missing or ambiguous account, category, " +
+  "workspace, currency, a suggested_category to accept) goes in the client's choice prompt with " +
+  "the matching options from get_context; use a numbered list only if the client has no such " +
+  "prompt. Never explain internals.",
   "Amounts are decimal strings. Use the workspace currency; never convert or guess another one.",
   "Use a new UUID request_id for each new transaction and reuse it only to retry that same one.",
   "Pass the payee name as the user said it. Omit category_id to use the payee's default category. " +
